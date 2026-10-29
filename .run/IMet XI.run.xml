@@ -1,0 +1,8 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="IMet XI" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="com.imet.App" />
+    <module name="xi-app" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/distribution/target/xi-work" />
+    <method v="2"><option name="Make" enabled="true" /></method>
+  </configuration>
+</component>

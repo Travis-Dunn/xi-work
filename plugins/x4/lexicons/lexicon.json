@@ -1,0 +1,351 @@
+{
+	"lexiconSpecificationVersion":"0.2.0",
+	"lexiconVersion":"0.1.0",
+	"deviceName":"iMet-X4 J1",
+	"deviceID":2,
+	"pluginFileName":"X4Plugin.jar",
+	"protocol":"serial",
+	"protocolTokens": {
+		"serial_port":-1,
+		"serial_baud":115200
+	},
+	"description":"Configurable sensor hub with built in TPU sensors. This is for the J1 connector only.",
+	"messages": [
+		{
+			"messageName":"serialPort",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Set or query the serial port for the device",
+			"messageTokens": {
+				"return_q":"int",
+				"return_q_len":1,
+				"argument_c":"int",
+				"argument_c_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"This is just communicating with the plugin, note the device."
+		},
+		{
+			"messageName":"forwardByteStream",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":false,
+				"messageType_p":false
+			},
+			"messageDescription":"Return all data from J1 since the last use of this message, up to the maximum size of the plugin's data buffer",
+			"messageTokens": {
+				"return_q":"byte",
+				"return_q_len":0
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"This is just a byte forwarding function. It doesn't require sending anything to the plugin."
+		},
+		{
+			"messageName":"restartDevice",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Restart the X4 with a software reboot routine",
+			"messageTokens": {
+				"argument_c":"byte",
+				"argument_c_len":0
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/RST command."
+		},
+		{
+			"messageName":"configurePortToEmpty",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":true,
+				"messageType_p":true
+			},
+			"messageDescription":"Configures a port to sensor ID 0, empty",
+			"messageTokens": {
+				"argument_c":"float",
+				"argument_c_len":1,
+				"argument_p":"float",
+				"argument_p_len":1,
+				"return_p":"float",
+				"return_p":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"The command is to set the port value. The parameterized query is to check if a port is set to this sensor. Command and parameterized query argument is {port number 4-9}, parameterized query return is true or false expressed as an integer."
+		},
+		{
+			"messageName":"configurePortToAirThermistor",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":true,
+				"messageType_p":true
+			},
+			"messageDescription":"Configures a port to sensor ID 3, an air temperature thermistor",
+			"messageTokens": {
+				"argument_c":"float",
+				"argument_c_len":6,
+				"argument_p":"float",
+				"argument_p_len":1,
+				"return_p":"float",
+				"return_p":5
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"The command is to set the port value and sensor information. The parameterized query is to check if a port is set to this sensor. The command argument is {port, serial number, AT1, AT2, AT3, AT4}. The parameterized query argument is {port}. The parameterized query return is {serial number, AT1, AT2, AT3, AT4}."
+		},
+		{
+			"messageName":"configurePortToHYT271",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":true,
+				"messageType_p":true
+			},
+			"messageDescription":"Configures a port to sensor ID 4, the HYT271 humidity sensor",
+			"messageTokens": {
+				"argument_c":"int",
+				"argument_c_len":2,
+				"argument_p":"int",
+				"argument_p_len":1,
+				"return_p":"int",
+				"return_p":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"The command is to set the port value and sensor information. The parameterized query is to check if a port is set to this sensor. The command argument is {port, I2C address}. The parameterized query argument is {port}. The parameterized query return is {I2C address}."
+		},
+		{
+			"messageName":"configurePortToSerialForward",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":true,
+				"messageType_p":true
+			},
+			"messageDescription":"Configures a port to sensor ID 6, the serial forward mode",
+			"messageTokens": {
+				"argument_c":"int",
+				"argument_c_len":3,
+				"argument_p":"int",
+				"argument_p_len":1,
+				"return_p":"int",
+				"return_p":2
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"The command is to set the port value and sensor information. The parameterized query is to check if a port is set to this sensor. The command argument is {port, baud rate, header columns}. The parameterized query argument is {port}. The parameterized query return is {baud rate, header columns}."
+		},
+		{
+			"messageName":"resetBoardData",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Configures the board to output all data with a comma delimiter",
+			"messageTokens": {
+				"argument_c":"int",
+				"argument_c_len":0
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"Just send /CBD=0,0\r\n with this. It's the only configuration supported by the GUI."
+		},
+		{
+			"messageName":"dataPublishingFrequency",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Configures the device's data publishing frequency in Hz",
+			"messageTokens": {
+				"argument_c":"float",
+				"argument_c_len":1,
+				"return_q":"float",
+				"return_q_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/DPF command. See manual for limits."
+		},
+		{
+			"messageName":"firmwareVersion",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":false,
+				"messageType_p":false
+			},
+			"messageDescription":"Query the firmware version from the device",
+			"messageTokens": {
+				"return_q":"ascii",
+				"return_q_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/VER command."
+		},
+		{
+			"messageName":"pressureBias",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Configures the device's pressure bias in mB, hPa",
+			"messageTokens": {
+				"argument_c":"float",
+				"argument_c_len":1,
+				"return_q":"float",
+				"return_q_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/CPB command."
+		},
+		{
+			"messageName":"toggleDataPublishing",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Toggle the device's data publishing. ON or OFF.",
+			"messageTokens": {
+				"argument_c":"int",
+				"argument_c_len":1,
+				"return_q":"int",
+				"return_q_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/TDP command. 1=ON, 0=OFF."
+		},
+		{
+			"messageName":"acknowledgeDevice",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":false,
+				"messageType_p":false
+			},
+			"messageDescription":"Query the device for acknowledgement",
+			"messageTokens": {
+				"return_q":"int",
+				"return_q_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/ACK command. 1=device acknowledged, 0=device did not acknowledge"
+		},
+		{
+			"messageName":"eraseSDCardData",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Erase the data on the microSD card",
+			"messageTokens": {
+				"argument_c":"int",
+				"argument_c_len":0
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/ERD command. No argument required."
+		},
+		{
+			"messageName":"getSDCardData",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":false,
+				"messageType_p":false
+			},
+			"messageDescription":"Query the device for the contents of log.dat on the microSD card",
+			"messageTokens": {
+				"return_q":"ascii",
+				"return_q_len":0
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/GET command. The return of this could be nothing or very large. On the X4, it is implemented as a stream."
+		},
+		{
+			"messageName":"enablePort",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":true,
+				"messageType_p":true
+			},
+			"messageDescription":"Enable or disable ports J4 and J5",
+			"messageTokens": {
+				"argument_c":"int",
+				"argument_c_len":2,
+				"argument_p":"int",
+				"argument_p_len":1,
+				"return_p":"int",
+				"return_p_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/EJ4 and /EJ5. The parameterized query is to check if a port is enabled. 0=disabled, 1=enabled. The command argument is {port, enable/disable}. The parameterized query argument is {port}. The parameterized query return is {enabled/disabled}."
+		},
+		{
+			"messageName":"forwardBytesToJ6",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Forward data to J6. Requires the port to be configured to serial forwarding mode.",
+			"messageTokens": {
+				"argument_c":"ascii",
+				"argument_c_len":1,
+				"return_p":"int",
+				"return_p_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/SJ6"
+		},
+		{
+			"messageName":"forwardBytesToJ7",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Forward data to J7. Requires the port to be configured to serial forwarding mode.",
+			"messageTokens": {
+				"argument_c":"ascii",
+				"argument_c_len":1,
+				"return_p":"int",
+				"return_p_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/SJ7"
+		},
+		{
+			"messageName":"serialNumber",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Query the serial number from the device.",
+			"messageTokens": {
+				"argument_c":"ascii",
+				"argument_c_len":1,
+				"return_p":"ascii",
+				"return_p_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/SRN"
+		},
+		{
+			"messageName":"remoteFirmwareUpdate",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":false,
+				"messageType_p":true
+			},
+			"messageDescription":"Initiate an OTA update.",
+			"messageTokens": {
+				"argument_p":"byte",
+				"argument_p_len":1,
+				"return_p":"byte",
+				"return_p_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"The argument provides the firmware file. The return is 0=failure, 1=success. This will require a firmware programming library."
+		}
+	]
+}

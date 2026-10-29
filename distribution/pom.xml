@@ -1,0 +1,122 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.imet</groupId>
+        <artifactId>xi-work</artifactId>
+        <version>0.1.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+    <artifactId>xi-distribution</artifactId>
+    <packaging>pom</packaging>
+    <dependencies>
+        <dependency>
+            <groupId>com.imet</groupId>
+            <artifactId>xi-app</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.imet</groupId>
+            <artifactId>x4-plugin</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>assemble-distribution</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <mkdir dir="${project.build.directory}/xi-work/plugins" />
+                                <mkdir dir="${project.build.directory}/xi-work/lexicons" />
+                                <copy file="${project.basedir}/../app/target/xi-app-${project.version}.jar" tofile="${project.build.directory}/xi-work/xi-app.jar" />
+                                <copy file="${project.basedir}/../plugins/x4/target/X4Plugin.jar" todir="${project.build.directory}/xi-work/plugins" />
+                                <copy todir="${project.build.directory}/xi-work/lexicons">
+                                    <fileset dir="${project.basedir}/../plugins/x4/lexicons" />
+                                </copy>
+                                <copy todir="${project.build.directory}/xi-work">
+                                    <fileset dir="${project.basedir}/src/main/scripts" />
+                                </copy>
+                                <chmod file="${project.build.directory}/xi-work/run.sh" perm="755" />
+                                <zip destfile="${project.build.directory}/xi-work-${project.version}.zip">
+                                    <zipfileset dir="${project.build.directory}/xi-work" prefix="xi-work" excludes="run.sh" />
+                                    <zipfileset dir="${project.build.directory}/xi-work" prefix="xi-work" includes="run.sh" filemode="755" />
+                                </zip>
+                            </target>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>verify-plugin-boundary</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <mkdir dir="${project.build.directory}/boundary-check" />
+                                <javac srcdir="${project.basedir}/src/test/java" destdir="${project.build.directory}/boundary-check" release="17" includeantruntime="false" classpath="${project.build.directory}/xi-work/xi-app.jar" />
+                                <java classname="VerifyDistribution" fork="true" failonerror="true" classpath="${project.build.directory}/boundary-check${path.separator}${project.build.directory}/xi-work/xi-app.jar">
+                                    <arg value="${project.build.directory}/xi-work" />
+                                </java>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+    <profiles>
+        <profile>
+            <id>installer</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <version>1.6.5</version>
+                        <configuration>
+                            <name>IMet XI</name>
+                            <appVersion>${project.version}</appVersion>
+                            <vendor>InterMet Systems</vendor>
+                            <description>Hardware interface and data viewer for iMet devices</description>
+                            <copyright>Copyright (c) 2025 ${app.vendor}</copyright>
+                            <input>${project.build.directory}/xi-work</input>
+                            <mainJar>xi-app.jar</mainJar>
+                            <mainClass>com.imet.App</mainClass>
+                            <destination>${project.build.directory}/installer</destination>
+                            <type>MSI</type>
+                            <winMenu>true</winMenu>
+                            <winShortcut>true</winShortcut>
+                            <winDirChooser>true</winDirChooser>
+                            <winMenuGroup>${app.name}</winMenuGroup>
+                            <javaOptions>
+                                <javaOption>--enable-native-access=ALL-UNNAMED</javaOption>
+                                <javaOption>-Djava.library.path=$APPDIR</javaOption>
+                                <javaOption>-Dapp.dir=$APPDIR</javaOption>
+                                <javaOption>-Dplugins.dir=$APPDIR/plugins</javaOption>
+                                <javaOption>-Dlexicons.dir=$APPDIR/lexicons</javaOption>
+                            </javaOptions>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>build-installer</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>jpackage</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

@@ -1,0 +1,13 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.imet</groupId><artifactId>xi-work</artifactId><version>0.1.0</version><packaging>pom</packaging>
+  <name>IMet XI Workspace</name>
+  <modules><module>plugin-api</module><module>app</module><module>plugins/x4</module><module>distribution</module></modules>
+  <properties><maven.compiler.release>17</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding><jssc.version>2.9.5</jssc.version></properties>
+  <dependencyManagement><dependencies><dependency><groupId>io.github.java-native</groupId><artifactId>jssc</artifactId><version>${jssc.version}</version></dependency></dependencies></dependencyManagement>
+  <build><pluginManagement><plugins>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.12.1</version></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-jar-plugin</artifactId><version>3.3.0</version></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.3</version></plugin>
+  </plugins></pluginManagement></build>
+</project>
