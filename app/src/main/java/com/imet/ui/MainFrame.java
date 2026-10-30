@@ -56,6 +56,10 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
     private static final String ERR_STR_PLUGIN_DIR =
             "Unable to find plugin directory.";
 
+    /* TEMP: the console test opens its own hardcoded port through the
+       plugin, which collides with the J1 port the GUI opens. Off for now. */
+    private static final boolean CONSOLE_TEST_ENABLED = false;
+
     public MainFrame() {
         super(AppInfo.WINDOW_TITLE);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -119,7 +123,7 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
 
     /** Start console input after the frame has been initialized and shown. */
     public void startConsoleTest() {
-        if (consoleThread != null) {
+        if (consoleThread != null && CONSOLE_TEST_ENABLED) {
             consoleThread.start();
         }
     }

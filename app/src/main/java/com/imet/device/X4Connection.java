@@ -1,5 +1,6 @@
 package com.imet.device;
 
+import com.imet.Console;
 import com.imet.plugin.PluginTest;
 import jssc.SerialPort;
 import jssc.SerialPortException;
@@ -63,6 +64,7 @@ public class X4Connection implements AutoCloseable {
                     + ". Disconnect first.");
         }
 
+        Console.log("J1 opening " + portName + " at " + BAUD_RATE + " 8-N-1");
         SerialPort port = new SerialPort(portName);
         try {
             port.openPort();
@@ -70,8 +72,10 @@ public class X4Connection implements AutoCloseable {
             port.setFlowControlMode(FLOW_CONTROL);
 
             Thread.sleep(POST_OPEN_DELAY_MS);
+            Console.log("J1 port open");
 
         } catch (SerialPortException e) {
+            Console.log("J1 open failed: " + e.getExceptionType());
             closeQuietly(port);
             throw new IOException("Failed to open " + portName + ": "
                     + e.getExceptionType(), e);
@@ -85,14 +89,18 @@ public class X4Connection implements AutoCloseable {
         // The port is open — let the plugin check that an X4 is on it.
         // Any failure from the plugin must still release the port.
         try {
-            plugin.setTransport(new SerialPortTransport(port));
+            Console.log("J1 plugin startComm (ACK handshake)");
+            plugin.setTransport(new SerialPortTransport(port, "J1"));
             plugin.startComm();
+            Console.log("J1 plugin verified the device");
         } catch (IOException | RuntimeException e) {
+            Console.log("J1 plugin rejected the device: " + e);
             plugin.stopComm();
             closeQuietly(port);
             throw new IOException(portName + ": " + e.getMessage(), e);
         } catch (AbstractMethodError e) {
             // plugins/X4Plugin.jar was built against the old PluginTest.
+            Console.log("J1 plugin is out of date: " + e);
             closeQuietly(port);
             throw new IOException("The X4 plugin is out of date. Rebuild "
                     + "X4Plugin.jar and copy it into the plugins folder.", e);
@@ -117,10 +125,13 @@ public class X4Connection implements AutoCloseable {
         }
         try {
             // Drain before sending so we only read the response to this command.
-            if (serialPort.getInputBufferBytesCount() > 0) {
-                serialPort.readBytes(serialPort.getInputBufferBytesCount());
+            int stale = serialPort.getInputBufferBytesCount();
+            if (stale > 0) {
+                byte[] drained = serialPort.readBytes(stale);
+                Console.log("J1 discarded before TX " + Console.escape(drained));
             }
 
+            Console.log("J1 TX " + Console.escape(command));
             serialPort.writeBytes(command.getBytes());
             return readResponse(serialPort, timeoutMs);
 
@@ -140,6 +151,7 @@ public class X4Connection implements AutoCloseable {
     /** Closes the serial port if open. Safe to call multiple times. */
     public void disconnect() {
         if (serialPort != null) {
+            Console.log("J1 closing " + serialPort.getPortName());
             plugin.stopComm();
             closeQuietly(serialPort);
             serialPort = null;
@@ -173,12 +185,15 @@ public class X4Connection implements AutoCloseable {
             throws SerialPortException, InterruptedException {
 
         StringBuilder sb = new StringBuilder();
-        long deadline = System.currentTimeMillis() + timeoutMs;
+        long start = System.currentTimeMillis();
+        long deadline = start + timeoutMs;
 
         while (System.currentTimeMillis() < deadline) {
             int available = port.getInputBufferBytesCount();
             if (available > 0) {
                 byte[] chunk = port.readBytes(available);
+                Console.log("J1 RX +" + (System.currentTimeMillis() - start)
+                        + " ms " + Console.escape(chunk));
                 sb.append(new String(chunk));
 
                 if (sb.indexOf("\n") >= 0) {
@@ -187,6 +202,12 @@ public class X4Connection implements AutoCloseable {
             } else {
                 Thread.sleep(POLL_INTERVAL_MS);
             }
+        }
+
+        if (sb.length() == 0) {
+            Console.log("J1 RX nothing within " + timeoutMs + " ms");
+        } else if (sb.indexOf("\n") < 0) {
+            Console.log("J1 RX no line end within " + timeoutMs + " ms");
         }
 
         return sb.length() > 0 ? sb.toString().trim() : null;

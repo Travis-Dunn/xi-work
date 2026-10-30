@@ -1,5 +1,6 @@
 package com.imet.ui.views;
 
+import com.imet.Console;
 import com.imet.device.J3Connection;
 import com.imet.device.X4Connection;
 import com.imet.plugin.Loader;
@@ -703,10 +704,21 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
                     }
                     // If response is null or malformed we leave both fields null
                     // and warn the user in done().
+                    if (queriedJ3Baud != null) {
+                        Console.log("J3 baud from /CJ3?: " + queriedJ3Baud);
+                    } else if (unrecognizedJ3Baud != null) {
+                        Console.log("J3 baud from /CJ3?: unrecognized "
+                                + Console.escape(unrecognizedJ3Baud));
+                    } else {
+                        Console.log("J3 baud from /CJ3?: reply does not start"
+                                + " with \"CJ3=\": " + (response == null
+                                ? "no reply" : Console.escape(response)));
+                    }
 
                     openedConnection = connection;
 
                 } catch (Exception e) {
+                    Console.log("J1 connect failed: " + e);
                     // The port may already be open (e.g. /CJ3? failed after
                     // the handshake), so release it or the next attempt
                     // finds the port busy.

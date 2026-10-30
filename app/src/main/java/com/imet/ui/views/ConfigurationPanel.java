@@ -1,5 +1,6 @@
 package com.imet.ui.views;
 
+import com.imet.Console;
 import com.imet.device.X4Connection;
 
 import javax.swing.*;
@@ -219,9 +220,11 @@ public class ConfigurationPanel extends JPanel {
                         String key   = response.substring(0, eq).trim().toUpperCase();
                         String value = response.substring(eq + 1).trim();
                         results.put(key, value);
+                    } else {
+                        // No '=': likely a stray streaming data line; skip it.
+                        Console.log("Fetch skipped reply to " + cmd.trim()
+                                + ": " + Console.escape(response));
                     }
-                    // If the response doesn't contain '=' it is likely a stray
-                    // streaming data line; skip it silently.
                 }
 
                 return results;
@@ -233,6 +236,7 @@ public class ConfigurationPanel extends JPanel {
                 try {
                     results = get();
                 } catch (ExecutionException ex) {
+                    Console.log("Fetch failed: " + ex.getCause());
                     statusLabel.setText("Fetch failed");
                     statusLabel.setForeground(new Color(255, 25, 25));
                     return;

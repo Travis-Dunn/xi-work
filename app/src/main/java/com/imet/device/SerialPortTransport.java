@@ -1,6 +1,7 @@
 package com.imet.device;
 
 import com.imet.plugin.PluginTransport;
+import com.imet.Console;
 import jssc.SerialPort;
 import jssc.SerialPortException;
 
@@ -21,13 +22,18 @@ class SerialPortTransport implements PluginTransport {
 
     private final SerialPort port;
 
-    SerialPortTransport(SerialPort port) {
+    /** Prefix for console log lines, e.g. "J1". */
+    private final String label;
+
+    SerialPortTransport(SerialPort port, String label) {
         this.port = port;
+        this.label = label;
     }
 
     @Override
     public int write(byte[] data) throws IOException {
         try {
+            Console.log(label + " plugin TX " + Console.escape(data));
             port.writeBytes(data);
             return data.length;
         } catch (SerialPortException e) {
@@ -42,9 +48,13 @@ class SerialPortTransport implements PluginTransport {
             while (true) {
                 int available = port.getInputBufferBytesCount();
                 if (available > 0) {
-                    return port.readBytes(Math.min(available, maxBytes));
+                    byte[] chunk = port.readBytes(Math.min(available, maxBytes));
+                    Console.log(label + " plugin RX " + Console.escape(chunk));
+                    return chunk;
                 }
                 if (System.currentTimeMillis() >= deadline) {
+                    Console.log(label + " plugin RX nothing within "
+                            + timeoutMs + " ms");
                     return new byte[0];
                 }
                 Thread.sleep(POLL_INTERVAL_MS);
@@ -71,7 +81,9 @@ class SerialPortTransport implements PluginTransport {
         try {
             int available = port.getInputBufferBytesCount();
             if (available > 0) {
-                port.readBytes(available);
+                byte[] discarded = port.readBytes(available);
+                Console.log(label + " plugin flush discarded "
+                        + Console.escape(discarded));
             }
         } catch (SerialPortException e) {
             throw new IOException("Serial error: " + e.getExceptionType(), e);
