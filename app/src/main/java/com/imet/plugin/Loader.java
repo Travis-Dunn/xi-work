@@ -243,6 +243,9 @@ public class Loader {
 
         /* TODO: close loader in success path as well? */
 
+        Console.println(String.format("Successfully loaded [%s] as plugin.\n",
+                jarName));
+
         return plugin;
     }
 
