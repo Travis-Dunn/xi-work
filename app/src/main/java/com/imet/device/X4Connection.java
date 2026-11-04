@@ -6,7 +6,13 @@ import jssc.SerialPort;
 import jssc.SerialPortException;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * Manages the serial connection to an iMet-X4 Hub over J1.
@@ -19,6 +25,11 @@ import java.util.Objects;
  * Once connected, the port remains open for subsequent command
  * exchanges (configuration queries, writes, etc.).  Call
  * {@link #disconnect()} to release the port.
+ * <p>
+ * After the handshake, a reader thread is the only thing that reads the
+ * port. It passes every received chunk to the listeners added with
+ * {@link #addReceiveListener}, and hands complete lines to a waiting
+ * {@link #sendCommand}.
  */
 public class X4Connection implements AutoCloseable {
 
@@ -34,10 +45,31 @@ public class X4Connection implements AutoCloseable {
     /** Default timeout for a command response. */
     private static final int DEFAULT_TIMEOUT_MS = 500;
 
-    /** Polling interval while waiting for a response. */
+    /** Polling interval of the reader thread while no bytes are waiting. */
     private static final int POLL_INTERVAL_MS = 20;
 
+    /** How long {@link #disconnect} waits for the reader thread to stop. */
+    private static final int READER_STOP_TIMEOUT_MS = 500;
+
+    /**
+     * A line longer than this without a line end is discarded, so a
+     * device sending no newlines can't grow the line buffer forever.
+     */
+    private static final int MAX_LINE_LENGTH = 4096;
+
     private SerialPort serialPort;
+
+    /** Reads J1 while connected; null when disconnected. */
+    private Thread readerThread;
+
+    /** Called on the reader thread with each chunk of bytes received. */
+    private final List<Consumer<byte[]>> receiveListeners = new CopyOnWriteArrayList<>();
+
+    /**
+     * Set while a {@link #sendCommand} is waiting; the reader offers it
+     * every complete line.
+     */
+    private volatile BlockingQueue<String> pendingReply;
 
     /** Device plugin that verifies the device once the port is open. */
     private final PluginTest plugin;
@@ -107,6 +139,20 @@ public class X4Connection implements AutoCloseable {
         }
 
         this.serialPort = port;
+        startReader(port);
+    }
+
+    /**
+     * Registers a listener for everything received on J1, exactly as it
+     * arrives. It is called on the reader thread, so a Swing listener must
+     * hand the bytes to the EDT itself.
+     */
+    public void addReceiveListener(Consumer<byte[]> listener) {
+        receiveListeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    public void removeReceiveListener(Consumer<byte[]> listener) {
+        receiveListeners.remove(listener);
     }
 
     /**
@@ -115,31 +161,42 @@ public class X4Connection implements AutoCloseable {
      * @param command   the full command including leading {@code /} and
      *                  trailing {@code \r\n}
      * @param timeoutMs maximum time to wait for a response
-     * @return the trimmed response string, or {@code null} if no
-     *         response was received within the timeout
+     * @return the first complete line received after the command was sent,
+     *         trimmed, or {@code null} if none arrived within the timeout.
+     *         With data publishing on, this may be a data line rather than
+     *         the reply.
      * @throws IOException if the port is not open or a serial error occurs
      */
-    public String sendCommand(String command, int timeoutMs) throws IOException {
+    public synchronized String sendCommand(String command, int timeoutMs)
+            throws IOException {
         if (serialPort == null || !serialPort.isOpened()) {
             throw new IOException("Not connected.");
         }
+        BlockingQueue<String> reply = new LinkedBlockingQueue<>();
         try {
-            // Drain before sending so we only read the response to this command.
-            int stale = serialPort.getInputBufferBytesCount();
-            if (stale > 0) {
-                byte[] drained = serialPort.readBytes(stale);
-                Console.log("J1 discarded before TX " + Console.escape(drained));
-            }
-
             Console.log("J1 TX " + Console.escape(command));
+            long start = System.currentTimeMillis();
             serialPort.writeBytes(command.getBytes());
-            return readResponse(serialPort, timeoutMs);
+            // Listen only from here, so a line that was already arriving
+            // before the command isn't taken as its reply.
+            pendingReply = reply;
+
+            String line = reply.poll(timeoutMs, TimeUnit.MILLISECONDS);
+            if (line == null) {
+                Console.log("J1 no reply within " + timeoutMs + " ms");
+            } else {
+                Console.log("J1 reply +" + (System.currentTimeMillis() - start)
+                        + " ms " + Console.escape(line));
+            }
+            return line;
 
         } catch (SerialPortException e) {
             throw new IOException("Serial error: " + e.getExceptionType(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("Command interrupted.", e);
+        } finally {
+            pendingReply = null;
         }
     }
 
@@ -152,6 +209,7 @@ public class X4Connection implements AutoCloseable {
     public void disconnect() {
         if (serialPort != null) {
             Console.log("J1 closing " + serialPort.getPortName());
+            stopReader();
             plugin.stopComm();
             closeQuietly(serialPort);
             serialPort = null;
@@ -177,40 +235,84 @@ public class X4Connection implements AutoCloseable {
     //  Internal helpers
     // ────────────────────────────────────────────────────────────────────────
 
+    private void startReader(SerialPort port) {
+        readerThread = new Thread(() -> readLoop(port), "imet-j1-reader");
+        readerThread.setDaemon(true);
+        readerThread.start();
+        Console.log("J1 reader started");
+    }
+
+    /** Stops the reader thread; it must not be reading when the port closes. */
+    private void stopReader() {
+        Thread reader = readerThread;
+        readerThread = null;
+        if (reader == null) {
+            return;
+        }
+        reader.interrupt();
+        try {
+            reader.join(READER_STOP_TIMEOUT_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (reader.isAlive()) {
+            Console.log("J1 reader did not stop within "
+                    + READER_STOP_TIMEOUT_MS + " ms");
+        }
+    }
+
     /**
-     * Reads bytes from the port until a newline is seen or the timeout
-     * expires.  Uses short polling intervals to stay responsive.
+     * Reader thread body: polls the port, passes each chunk to the receive
+     * listeners, and splits the bytes into lines for {@link #sendCommand}.
+     * Runs until interrupted by {@link #stopReader} or a serial error.
      */
-    private static String readResponse(SerialPort port, int timeoutMs)
-            throws SerialPortException, InterruptedException {
-
-        StringBuilder sb = new StringBuilder();
-        long start = System.currentTimeMillis();
-        long deadline = start + timeoutMs;
-
-        while (System.currentTimeMillis() < deadline) {
-            int available = port.getInputBufferBytesCount();
-            if (available > 0) {
-                byte[] chunk = port.readBytes(available);
-                Console.log("J1 RX +" + (System.currentTimeMillis() - start)
-                        + " ms " + Console.escape(chunk));
-                sb.append(new String(chunk));
-
-                if (sb.indexOf("\n") >= 0) {
-                    break;
+    private void readLoop(SerialPort port) {
+        StringBuilder line = new StringBuilder();
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                int available = port.getInputBufferBytesCount();
+                if (available <= 0) {
+                    Thread.sleep(POLL_INTERVAL_MS);
+                    continue;
                 }
-            } else {
-                Thread.sleep(POLL_INTERVAL_MS);
+                byte[] chunk = port.readBytes(available);
+
+                for (Consumer<byte[]> listener : receiveListeners) {
+                    try {
+                        listener.accept(chunk);
+                    } catch (RuntimeException e) {
+                        Console.log("J1 receive listener failed: " + e);
+                    }
+                }
+
+                for (byte b : chunk) {
+                    if (b == '\n') {
+                        deliverLine(line.toString().trim());
+                        line.setLength(0);
+                    } else if (line.length() < MAX_LINE_LENGTH) {
+                        line.append((char) (b & 0xFF));
+                    } else {
+                        Console.log("J1 discarded a line longer than "
+                                + MAX_LINE_LENGTH + " bytes");
+                        line.setLength(0);
+                    }
+                }
             }
+        } catch (InterruptedException e) {
+            // stopReader() asked us to stop.
+        } catch (SerialPortException e) {
+            Console.log("J1 reader stopped: " + e.getExceptionType());
+            return;
         }
+        Console.log("J1 reader stopped");
+    }
 
-        if (sb.length() == 0) {
-            Console.log("J1 RX nothing within " + timeoutMs + " ms");
-        } else if (sb.indexOf("\n") < 0) {
-            Console.log("J1 RX no line end within " + timeoutMs + " ms");
+    /** Hands a complete line to a waiting {@link #sendCommand}, if any. */
+    private void deliverLine(String line) {
+        BlockingQueue<String> reply = pendingReply;
+        if (reply != null) {
+            reply.offer(line);
         }
-
-        return sb.length() > 0 ? sb.toString().trim() : null;
     }
 
     /** Best-effort port close; swallows exceptions. */

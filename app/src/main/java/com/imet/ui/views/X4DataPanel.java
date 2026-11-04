@@ -1,11 +1,14 @@
 package com.imet.ui.views;
 
+import com.imet.device.X4Connection;
+
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * X4 Data view (SoW 205196 section 3.2). Laid out after Figure 3-1, the
@@ -19,9 +22,10 @@ import java.util.Map;
  *   <li>Read-only J1 and J3 terminals along the bottom (#33, #34)</li>
  * </ul>
  *
- * <p>Layout only for now: nothing is read from the device yet, and the
- * buttons have no actions. Which data column feeds which field is
- * described in {@code docs/x4-data-format.md}.
+ * <p>So far only the J1 terminal is live (see {@link #setConnection}); the
+ * fields are not filled in yet and the buttons have no actions. Which
+ * data column feeds which field is described in
+ * {@code docs/x4-data-format.md}.
  */
 public class X4DataPanel extends JPanel {
 
@@ -127,8 +131,17 @@ public class X4DataPanel extends JPanel {
 
     // ── Terminals ────────────────────────────────────────────────────────────
 
-    private JTextArea j1Terminal;
-    private JTextArea j3Terminal;
+    private TerminalPane j1Terminal;
+    private TerminalPane j3Terminal;
+
+    // ── Connection ───────────────────────────────────────────────────────────
+
+    /** J1 connection feeding the J1 terminal; null when disconnected. */
+    private X4Connection connection;
+
+    /** Hands J1 bytes from the connection's reader thread to the EDT. */
+    private final Consumer<byte[]> j1Receiver =
+            data -> SwingUtilities.invokeLater(() -> j1Terminal.append(data));
 
     // ── Layout ───────────────────────────────────────────────────────────────
 
@@ -185,6 +198,24 @@ public class X4DataPanel extends JPanel {
         // #27: no sensor rows until the port settings are known.
         for (int port = 4; port <= 9; port++) {
             setPortSensor(port, SENSOR_NONE);
+        }
+    }
+
+    /**
+     * Called by the parent when the J1 connection is established or
+     * dropped. While connected, everything received on J1 is shown in the
+     * J1 terminal (#33). The terminal keeps its history after a
+     * disconnect.
+     *
+     * @param conn the active connection, or {@code null} once it closes
+     */
+    public void setConnection(X4Connection conn) {
+        if (connection != null) {
+            connection.removeReceiveListener(j1Receiver);
+        }
+        connection = conn;
+        if (conn != null) {
+            conn.addReceiveListener(j1Receiver);
         }
     }
 
@@ -458,8 +489,8 @@ public class X4DataPanel extends JPanel {
         panel.setBackground(CARD_BG);
         panel.setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
 
-        j1Terminal = createTerminal();
-        j3Terminal = createTerminal();
+        j1Terminal = new TerminalPane();
+        j3Terminal = new TerminalPane();
 
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.gridx = 0;
@@ -476,29 +507,11 @@ public class X4DataPanel extends JPanel {
         gbc.fill = GridBagConstraints.BOTH;
         gbc.insets = new Insets(0, 0, 8, 0);
         gbc.gridy = 0;
-        panel.add(wrapTerminal(j1Terminal), gbc);
+        panel.add(j1Terminal, gbc);
         gbc.gridy = 1;
-        panel.add(wrapTerminal(j3Terminal), gbc);
+        panel.add(j3Terminal, gbc);
 
         return panel;
-    }
-
-    private JTextArea createTerminal() {
-        JTextArea area = new JTextArea(3, 80);
-        area.setEditable(false);
-        area.setLineWrap(false);
-        area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        area.setBackground(new Color(0xF4F5F7));
-        return area;
-    }
-
-    private JScrollPane wrapTerminal(JTextArea terminal) {
-        JScrollPane scroll = new JScrollPane(terminal,
-                ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS,
-                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
-        scroll.setBorder(BorderFactory.createLineBorder(new Color(0xD0D0D0)));
-        scroll.setMinimumSize(new Dimension(100, 50));
-        return scroll;
     }
 
     // ────────────────────────────────────────────────────────────────────────

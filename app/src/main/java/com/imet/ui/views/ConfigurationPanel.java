@@ -176,8 +176,8 @@ public class ConfigurationPanel extends JPanel {
      *
      * <p><b>Note on streaming data:</b> if data publishing is active
      * ({@code TDP=ON}) when Fetch runs, an occasional streaming data line
-     * may be read as a command response (because {@code readResponse()} stops
-     * at the first newline).  When this happens the affected field is silently
+     * may be read as a command response (because {@code sendCommand()} returns
+     * the first line received).  When this happens the affected field is silently
      * left at its current value.  Re-clicking Fetch recovers the missed field.
      */
     private void performFetch() {
