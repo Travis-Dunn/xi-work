@@ -3,6 +3,7 @@ package com.imet.ui;
 import com.imet.serial.DeviceScanner;
 import com.imet.ui.views.ConfigurationPanel;
 import com.imet.ui.views.HardwarePanel;
+import com.imet.ui.views.X4DataPanel;
 import com.imet.ui.views.XQ2DataPanel;
 
 import javax.swing.*;
@@ -79,7 +80,7 @@ public class TabContentPanel extends JPanel {
                 views.add(VIEW_CONFIGURATION);
                 views.add(VIEW_DATA);
                 bodyPanel.add(new ConfigurationPanel(), VIEW_CONFIGURATION);
-                bodyPanel.add(createPlaceholder("X4 Data"), VIEW_DATA);
+                bodyPanel.add(new X4DataPanel(), VIEW_DATA);
             }
             case "IMet-XQ2" -> {
                 views.add(VIEW_DATA);

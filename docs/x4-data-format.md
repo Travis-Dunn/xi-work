@@ -55,7 +55,7 @@ state) are omitted.
 |    15 | Longitude               | °, 000.00000002      | Longitude (°)              |
 |    16 | Horizontal DoP          | 00.00                | HDoP                       |
 |    17 | Altitude (orthometric)  | m, 00000.0           | Altitude (m)               |
-|    18 | Speed Over Ground       | m/s, 000.000         | Ground Speed (knots)       |
+|    18 | Speed Over Ground       | m/s, 000.000         | Ground Speed (knots); XI uses (m/s) |
 |    19 | Tracking Angle (true)   | °, integer           | Tracking Angle (°)         |
 
 Battery Charge State: 0 = no battery, 1 = discharging, 2 = charging,
@@ -107,8 +107,8 @@ the device does not zero-pad, and #31 says to show it as sent.
 
 1. **Date label.** XS says "Date (YYYY-MM-DD)"; the device sends
    `mm/dd/yy` (`10/30/26`). Keep the XS label (#28) or correct it?
-2. **Ground speed label.** XS says "knots"; the manual says metres per
-   second. Keep or correct?
+2. ~~Ground speed label.~~ Resolved 2026-11-04: label it m/s, as the
+   manual says.
 3. **Header lines (#32).** Per Figure 4-1 the header is two lines, a
    title row (`X4 Board Sensors,,,,…`, padded with delimiters) and a
    column-name row. The title row can have the same column count as a
