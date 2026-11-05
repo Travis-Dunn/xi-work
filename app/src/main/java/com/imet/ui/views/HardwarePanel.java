@@ -14,6 +14,7 @@ import javax.swing.*;
 import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
 import java.awt.*;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -667,8 +668,8 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
             private X4Connection openedConnection;
 
             /**
-             * The baud rate string returned by {@code /CJ3?\r\n}, e.g. {@code "115200"}.
-             * {@code null} if the query failed or the response was unparseable.
+             * The J3 baud rate reported by the device, e.g. {@code "115200"}.
+             * {@code null} if the query failed or the rate isn't supported.
              */
             private String queriedJ3Baud;
 
@@ -685,10 +686,12 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
                     connection.connect(selectedPort);
 
                     // ── Query J3 baud rate ──────────────────────────────────
-                    // Response format (§3.3.3): "CJ3=<value>" (no leading slash).
-                    String response = connection.sendCommand("/CJ3?\r\n");
-                    if (response != null && response.startsWith("CJ3=")) {
-                        String candidate = response.substring(4).trim();
+                    // The plugin polls /CJ3? and skips streamed data lines.
+                    byte[] reply = plugin.messageType_q(
+                            "j3BaudRate".getBytes(StandardCharsets.US_ASCII));
+                    if (reply != null) {
+                        String candidate = new String(reply,
+                                StandardCharsets.US_ASCII).trim();
                         boolean supported = false;
                         for (String rate : J3_BAUD_RATES) {
                             if (rate.equals(candidate)) {
@@ -702,17 +705,15 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
                             unrecognizedJ3Baud = candidate;
                         }
                     }
-                    // If response is null or malformed we leave both fields null
-                    // and warn the user in done().
+                    // With no reply we leave both fields null and warn the
+                    // user in done().
                     if (queriedJ3Baud != null) {
-                        Console.log("J3 baud from /CJ3?: " + queriedJ3Baud);
+                        Console.log("J3 baud from j3BaudRate: " + queriedJ3Baud);
                     } else if (unrecognizedJ3Baud != null) {
-                        Console.log("J3 baud from /CJ3?: unrecognized "
+                        Console.log("J3 baud from j3BaudRate: unrecognized "
                                 + Console.escape(unrecognizedJ3Baud));
                     } else {
-                        Console.log("J3 baud from /CJ3?: reply does not start"
-                                + " with \"CJ3=\": " + (response == null
-                                ? "no reply" : Console.escape(response)));
+                        Console.log("J3 baud from j3BaudRate: no reply");
                     }
 
                     openedConnection = connection;

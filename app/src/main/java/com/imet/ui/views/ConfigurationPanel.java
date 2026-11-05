@@ -2,9 +2,11 @@ package com.imet.ui.views;
 
 import com.imet.Console;
 import com.imet.device.X4Connection;
+import com.imet.plugin.PluginTest;
 
 import javax.swing.*;
 import java.awt.*;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -165,20 +167,19 @@ public class ConfigurationPanel extends JPanel {
     // ────────────────────────────────────────────────────────────────────────
 
     /**
-     * Sends all configuration poll commands to the device over J1 and
+     * Asks the device, through the X4 plugin, for its current settings and
      * populates the panel fields with the returned values.
      *
-     * <p>Commands sent (see X4 User Guide §3.3):
+     * <p>Lexicon messages used (the X4 command each polls in brackets):
      * <pre>
-     *   /SRN?   /DPF?   /CPB?   /CJ3?   /TDP?
-     *   /CJ4?   /CJ5?   /CJ6?   /CJ7?   /CJ8?   /CJ9?
+     *   serialNumber (/SRN?)   dataPublishingFrequency (/DPF?)
+     *   pressureBias (/CPB?)   j3BaudRate (/CJ3?)
+     *   toggleDataPublishing (/TDP?)
+     *   configurePortTo... for ports 4-9 (/CJ4? - /CJ9?)
      * </pre>
      *
-     * <p><b>Note on streaming data:</b> if data publishing is active
-     * ({@code TDP=ON}) when Fetch runs, an occasional streaming data line
-     * may be read as a command response (because {@code sendCommand()} returns
-     * the first line received).  When this happens the affected field is silently
-     * left at its current value.  Re-clicking Fetch recovers the missed field.
+     * <p>The plugin skips streamed data lines, so this works with data
+     * publishing on.  A setting with no reply is left at its current value.
      */
     private void performFetch() {
         // Silent no-op if not connected — called speculatively from componentShown
@@ -191,39 +192,32 @@ public class ConfigurationPanel extends JPanel {
         new SwingWorker<Map<String, String>, Void>() {
 
             @Override
-            protected Map<String, String> doInBackground() throws Exception {
+            protected Map<String, String> doInBackground() {
+                PluginTest plugin = connection.getPlugin();
+                // Keyed by the X4 setting, as applyResults() expects.
                 Map<String, String> results = new LinkedHashMap<>();
 
-                // Poll every configurable setting in a single sequential pass.
-                // Response format (§3.3.1): "KEY=value" (no leading slash).
-                String[] commands = {
-                        "/SRN?\r\n",
-                        "/DPF?\r\n",
-                        "/CPB?\r\n",
-                        "/CJ3?\r\n",
-                        "/TDP?\r\n",
-                        "/CJ4?\r\n",
-                        "/CJ5?\r\n",
-                        "/CJ6?\r\n",
-                        "/CJ7?\r\n",
-                        "/CJ8?\r\n",
-                        "/CJ9?\r\n"
+                String[][] settings = {
+                        {"SRN", "serialNumber"},
+                        {"DPF", "dataPublishingFrequency"},
+                        {"CPB", "pressureBias"},
+                        {"CJ3", "j3BaudRate"},
+                        {"TDP", "toggleDataPublishing"},
                 };
-
-                for (String cmd : commands) {
-                    String response = connection.sendCommand(cmd);
-                    if (response == null) continue;
-
-                    int eq = response.indexOf('=');
-                    if (eq > 0) {
-                        // Key is case-insensitive in practice; normalise to upper case.
-                        String key   = response.substring(0, eq).trim().toUpperCase();
-                        String value = response.substring(eq + 1).trim();
-                        results.put(key, value);
+                for (String[] setting : settings) {
+                    String value = ascii(plugin.messageType_q(bytes(setting[1])));
+                    if (value != null) {
+                        results.put(setting[0], value.trim());
                     } else {
-                        // No '=': likely a stray streaming data line; skip it.
-                        Console.log("Fetch skipped reply to " + cmd.trim()
-                                + ": " + Console.escape(response));
+                        Console.log("Fetch got no " + setting[1]);
+                    }
+                }
+
+                // Port sensors, as sensor IDs.
+                for (int port = 4; port <= 9; port++) {
+                    Integer id = querySensorId(plugin, port);
+                    if (id != null) {
+                        results.put("CJ" + port, id.toString());
                     }
                 }
 
@@ -282,24 +276,74 @@ public class ConfigurationPanel extends JPanel {
         String cj3 = results.get("CJ3");
         if (cj3 != null) j3BaudCombo.setSelectedItem(cj3.trim());
 
-        // Data publishing toggle (TDP=ON|OFF)
+        // Data publishing toggle (toggleDataPublishing: 1 = ON, 0 = OFF)
         String tdp = results.get("TDP");
-        if (tdp != null) dataToggle.setSelected("ON".equalsIgnoreCase(tdp.trim()));
+        if (tdp != null) dataToggle.setSelected("1".equals(tdp.trim()));
 
-        // Port sensor types (CJ4–CJ9)
-        // Response is the peripheral-specific message: "0", "4,0x28,0", "3,sn,...", etc.
-        // The sensor ID is the first token before any comma (§3.3.4, §4.3).
+        // Port sensor types (CJ4–CJ9), as sensor IDs (§4.3)
         for (int port = 4; port <= 9; port++) {
             String val = results.get("CJ" + port);
             if (val == null) continue;
 
-            int commaIdx = val.indexOf(',');
-            String idStr = (commaIdx > 0) ? val.substring(0, commaIdx).trim() : val.trim();
-
             try {
-                selectSensorById(portCombos.get(port), Integer.parseInt(idStr));
+                selectSensorById(portCombos.get(port), Integer.parseInt(val));
             } catch (NumberFormatException ignored) {}
         }
+    }
+
+    /**
+     * Asks the plugin which sensor a port is set to, using the lexicon's
+     * configurePortTo... parameterized queries.  Only the sensors this
+     * screen offers for the port are checked (see getSensorOptions()).
+     *
+     * @return the sensor ID, or {@code null} if a query got no reply or the
+     *         port is set to a sensor this screen doesn't offer
+     */
+    private static Integer querySensorId(PluginTest plugin, int port) {
+        String empty = ascii(plugin.messageType_p(bytes("configurePortToEmpty=" + port)));
+        if (empty == null) {
+            Console.log("Fetch got no sensor for J" + port);
+            return null;
+        }
+        if (empty.equals("1")) {
+            return 0;
+        }
+
+        String message;
+        int sensorId;
+        switch (port) {
+            case 4, 5 -> {
+                message = "configurePortToHYT271";
+                sensorId = 4;
+            }
+            case 8, 9 -> {
+                message = "configurePortToAirThermistor";
+                sensorId = 3;
+            }
+            default -> {
+                Console.log("Fetch: J" + port + " is set to a sensor this screen doesn't offer");
+                return null;
+            }
+        }
+
+        byte[] values = plugin.messageType_p(bytes(message + "=" + port));
+        if (values == null) {
+            Console.log("Fetch got no sensor for J" + port);
+            return null;
+        }
+        if (values.length == 0) {
+            Console.log("Fetch: J" + port + " is set to a sensor this screen doesn't offer");
+            return null;
+        }
+        return sensorId;
+    }
+
+    private static byte[] bytes(String s) {
+        return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static String ascii(byte[] b) {
+        return (b == null) ? null : new String(b, StandardCharsets.US_ASCII);
     }
 
     /**

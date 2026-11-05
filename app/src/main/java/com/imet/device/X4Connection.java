@@ -8,10 +8,7 @@ import jssc.SerialPortException;
 import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -22,14 +19,13 @@ import java.util.function.Consumer;
  * end is delegated to the X4 plugin, which is handed the open port as a
  * {@link com.imet.plugin.PluginTransport}.
  * <p>
- * Once connected, the port remains open for subsequent command
- * exchanges (configuration queries, writes, etc.).  Call
- * {@link #disconnect()} to release the port.
+ * Once connected, the port remains open, and commands to the device go
+ * through the plugin ({@link #getPlugin}).  Call {@link #disconnect()} to
+ * release the port.
  * <p>
  * Once the port is open, a reader thread is the only thing that reads it.
  * It passes every received chunk to the plugin's transport, then to the
- * listeners added with {@link #addReceiveListener}, and hands complete
- * lines to a waiting {@link #sendCommand}.
+ * listeners added with {@link #addReceiveListener}.
  */
 public class X4Connection implements AutoCloseable {
 
@@ -42,20 +38,11 @@ public class X4Connection implements AutoCloseable {
     /** Time to let the FTDI chip settle after opening the port. */
     private static final int POST_OPEN_DELAY_MS = 50;
 
-    /** Default timeout for a command response. */
-    private static final int DEFAULT_TIMEOUT_MS = 500;
-
     /** Polling interval of the reader thread while no bytes are waiting. */
     private static final int POLL_INTERVAL_MS = 20;
 
     /** How long {@link #disconnect} waits for the reader thread to stop. */
     private static final int READER_STOP_TIMEOUT_MS = 500;
-
-    /**
-     * A line longer than this without a line end is discarded, so a
-     * device sending no newlines can't grow the line buffer forever.
-     */
-    private static final int MAX_LINE_LENGTH = 4096;
 
     private SerialPort serialPort;
 
@@ -67,12 +54,6 @@ public class X4Connection implements AutoCloseable {
 
     /** Called on the reader thread with each chunk of bytes received. */
     private final List<Consumer<byte[]>> receiveListeners = new CopyOnWriteArrayList<>();
-
-    /**
-     * Set while a {@link #sendCommand} is waiting; the reader offers it
-     * every complete line.
-     */
-    private volatile BlockingQueue<String> pendingReply;
 
     /** Device plugin that verifies the device once the port is open. */
     private final PluginTest plugin;
@@ -164,53 +145,11 @@ public class X4Connection implements AutoCloseable {
     }
 
     /**
-     * Sends a command string and returns the response.
-     *
-     * @param command   the full command including leading {@code /} and
-     *                  trailing {@code \r\n}
-     * @param timeoutMs maximum time to wait for a response
-     * @return the first complete line received after the command was sent,
-     *         trimmed, or {@code null} if none arrived within the timeout.
-     *         With data publishing on, this may be a data line rather than
-     *         the reply.
-     * @throws IOException if the port is not open or a serial error occurs
+     * Returns the plugin that talks to the device on this connection. Its
+     * message calls work only while connected.
      */
-    public synchronized String sendCommand(String command, int timeoutMs)
-            throws IOException {
-        if (serialPort == null || !serialPort.isOpened()) {
-            throw new IOException("Not connected.");
-        }
-        BlockingQueue<String> reply = new LinkedBlockingQueue<>();
-        try {
-            Console.log("J1 TX " + Console.escape(command));
-            long start = System.currentTimeMillis();
-            serialPort.writeBytes(command.getBytes());
-            // Listen only from here, so a line that was already arriving
-            // before the command isn't taken as its reply.
-            pendingReply = reply;
-
-            String line = reply.poll(timeoutMs, TimeUnit.MILLISECONDS);
-            if (line == null) {
-                Console.log("J1 no reply within " + timeoutMs + " ms");
-            } else {
-                Console.log("J1 reply +" + (System.currentTimeMillis() - start)
-                        + " ms " + Console.escape(line));
-            }
-            return line;
-
-        } catch (SerialPortException e) {
-            throw new IOException("Serial error: " + e.getExceptionType(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Command interrupted.", e);
-        } finally {
-            pendingReply = null;
-        }
-    }
-
-    /** Convenience overload using the default timeout. */
-    public String sendCommand(String command) throws IOException {
-        return sendCommand(command, DEFAULT_TIMEOUT_MS);
+    public PluginTest getPlugin() {
+        return plugin;
     }
 
     /** Closes the serial port if open. Safe to call multiple times. */
@@ -281,13 +220,11 @@ public class X4Connection implements AutoCloseable {
     }
 
     /**
-     * Reader thread body: polls the port, passes each chunk to the plugin's
-     * transport and the receive listeners, and splits the bytes into lines
-     * for {@link #sendCommand}. Runs until interrupted by
-     * {@link #stopReader} or a serial error.
+     * Reader thread body: polls the port and passes each chunk to the
+     * plugin's transport and the receive listeners. Runs until interrupted
+     * by {@link #stopReader} or a serial error.
      */
     private void readLoop(SerialPort port, SerialPortTransport transport) {
-        StringBuilder line = new StringBuilder();
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 int available = port.getInputBufferBytesCount();
@@ -305,19 +242,6 @@ public class X4Connection implements AutoCloseable {
                         Console.log("J1 receive listener failed: " + e);
                     }
                 }
-
-                for (byte b : chunk) {
-                    if (b == '\n') {
-                        deliverLine(line.toString().trim());
-                        line.setLength(0);
-                    } else if (line.length() < MAX_LINE_LENGTH) {
-                        line.append((char) (b & 0xFF));
-                    } else {
-                        Console.log("J1 discarded a line longer than "
-                                + MAX_LINE_LENGTH + " bytes");
-                        line.setLength(0);
-                    }
-                }
             }
         } catch (InterruptedException e) {
             // stopReader() asked us to stop.
@@ -326,14 +250,6 @@ public class X4Connection implements AutoCloseable {
             return;
         }
         Console.log("J1 reader stopped");
-    }
-
-    /** Hands a complete line to a waiting {@link #sendCommand}, if any. */
-    private void deliverLine(String line) {
-        BlockingQueue<String> reply = pendingReply;
-        if (reply != null) {
-            reply.offer(line);
-        }
     }
 
     /** Best-effort port close; swallows exceptions. */
