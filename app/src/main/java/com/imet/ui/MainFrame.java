@@ -56,9 +56,9 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
     private static final String ERR_STR_PLUGIN_DIR =
             "Unable to find plugin directory.";
 
-    /* TEMP: the console test opens its own hardcoded port through the
-       plugin, which collides with the J1 port the GUI opens. Off for now. */
-    private static final boolean CONSOLE_TEST_ENABLED = false;
+    /* TEMP: the console test sends plugin messages over the J1 connection
+       opened in the GUI. Set to false to keep it from reading stdin. */
+    private static final boolean CONSOLE_TEST_ENABLED = true;
 
     public MainFrame() {
         super(AppInfo.WINDOW_TITLE);
@@ -208,8 +208,13 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
             switch (variant) {
                 case "(query)": {
                     byte[] result = pluginX4.messageType_q(name.getBytes());
-                    String resultStr = new String(result, StandardCharsets.UTF_8);
-                    Console.println("the device returned [" + resultStr + "]");
+                    if (result == null) {
+                        Console.println("no result (J1 not connected, message "
+                                + "not supported, or no reply in time)");
+                    } else {
+                        String resultStr = new String(result, StandardCharsets.UTF_8);
+                        Console.println("the device returned [" + resultStr + "]");
+                    }
                     break;
                 }
                 case "(command)": {
