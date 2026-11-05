@@ -1,6 +1,6 @@
 {
 	"lexiconSpecificationVersion":"0.2.0",
-	"lexiconVersion":"0.1.0",
+	"lexiconVersion":"0.2.0",
 	"deviceName":"iMet-X4 J1",
 	"deviceID":2,
 	"pluginFileName":"X4Plugin.jar",
@@ -148,6 +148,23 @@
 			},
 			"messagePanelClass":"...",
 			"implementationNote":"Just send /CBD=0,0\r\n with this. It's the only configuration supported by the GUI."
+		},
+		{
+			"messageName":"j3BaudRate",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Set or query the UART baud rate on J3",
+			"messageTokens": {
+				"argument_c":"int",
+				"argument_c_len":1,
+				"return_q":"int",
+				"return_q_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/CJ3 command. Acceptable values are 9600, 19200, 38400, 57600 and 115200. The J3 port restarts at the new rate immediately."
 		},
 		{
 			"messageName":"dataPublishingFrequency",

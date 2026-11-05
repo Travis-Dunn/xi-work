@@ -137,7 +137,19 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
         // declared variant with 'o' if XI implements it, 'x' if not.
         String[] supportedByApp = new String[] {
                 "serialNumber (query)",
-                "serialNumber (command)"
+                "serialNumber (command)",
+                "dataPublishingFrequency (query)",
+                "dataPublishingFrequency (command)",
+                "pressureBias (query)",
+                "pressureBias (command)",
+                "toggleDataPublishing (query)",
+                "toggleDataPublishing (command)",
+                "j3BaudRate (query)",
+                "j3BaudRate (command)",
+                "configurePortToEmpty (parameterized query)",
+                "configurePortToAirThermistor (parameterized query)",
+                "configurePortToHYT271 (parameterized query)",
+                "configurePortToSerialForward (parameterized query)"
         };
         Set<String> supportedSet = new HashSet<>(Arrays.asList(supportedByApp));
 
@@ -201,10 +213,8 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
                         "sending %s as %s", name, variant));
             }
 
-            // Dispatch. The plugin only exposes _q and _c right now, so
-            // (parameterized query) has no path — we'd need a new plugin
-            // method for that. For now, only the two serialNumber variants
-            // in supportedByApp can actually reach this point.
+            // Dispatch to the plugin. Only the variants in supportedByApp
+            // can reach this point.
             switch (variant) {
                 case "(query)": {
                     byte[] result = pluginX4.messageType_q(name.getBytes());
@@ -223,8 +233,17 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
                     break;
                 }
                 case "(parameterized query)": {
-                    // TODO: plugin needs a parameterized-query method.
-                    Console.println("(parameterized query dispatch not implemented yet)");
+                    String payload = name + "=" + arg;
+                    byte[] result = pluginX4.messageType_p(payload.getBytes());
+                    if (result == null) {
+                        Console.println("no result (J1 not connected, bad "
+                                + "argument, or no reply in time)");
+                    } else if (result.length == 0) {
+                        Console.println("the port is not set to that sensor");
+                    } else {
+                        String resultStr = new String(result, StandardCharsets.UTF_8);
+                        Console.println("the device returned [" + resultStr + "]");
+                    }
                     break;
                 }
             }
