@@ -26,10 +26,10 @@ import java.util.function.Consumer;
  * exchanges (configuration queries, writes, etc.).  Call
  * {@link #disconnect()} to release the port.
  * <p>
- * After the handshake, a reader thread is the only thing that reads the
- * port. It passes every received chunk to the listeners added with
- * {@link #addReceiveListener}, and hands complete lines to a waiting
- * {@link #sendCommand}.
+ * Once the port is open, a reader thread is the only thing that reads it.
+ * It passes every received chunk to the plugin's transport, then to the
+ * listeners added with {@link #addReceiveListener}, and hands complete
+ * lines to a waiting {@link #sendCommand}.
  */
 public class X4Connection implements AutoCloseable {
 
@@ -61,6 +61,9 @@ public class X4Connection implements AutoCloseable {
 
     /** Reads J1 while connected; null when disconnected. */
     private Thread readerThread;
+
+    /** The plugin's view of the port, fed by the reader; null when closed. */
+    private SerialPortTransport transport;
 
     /** Called on the reader thread with each chunk of bytes received. */
     private final List<Consumer<byte[]>> receiveListeners = new CopyOnWriteArrayList<>();
@@ -118,28 +121,33 @@ public class X4Connection implements AutoCloseable {
             throw new IOException("Connection interrupted.", e);
         }
 
-        // The port is open — let the plugin check that an X4 is on it.
-        // Any failure from the plugin must still release the port.
+        // The port is open. Start the reader before anything else reads:
+        // from here on it is the only reader, and the plugin's transport
+        // gets its bytes from it.
+        transport = new SerialPortTransport(port, "J1");
+        startReader(port, transport);
+
+        // Let the plugin check that an X4 is on it. Any failure from the
+        // plugin must still release the port.
         try {
             Console.log("J1 plugin startComm (ACK handshake)");
-            plugin.setTransport(new SerialPortTransport(port, "J1"));
+            plugin.setTransport(transport);
             plugin.startComm();
             Console.log("J1 plugin verified the device");
         } catch (IOException | RuntimeException e) {
             Console.log("J1 plugin rejected the device: " + e);
             plugin.stopComm();
-            closeQuietly(port);
+            release(port);
             throw new IOException(portName + ": " + e.getMessage(), e);
         } catch (AbstractMethodError e) {
             // plugins/X4Plugin.jar was built against the old PluginTest.
             Console.log("J1 plugin is out of date: " + e);
-            closeQuietly(port);
+            release(port);
             throw new IOException("The X4 plugin is out of date. Rebuild "
                     + "X4Plugin.jar and copy it into the plugins folder.", e);
         }
 
         this.serialPort = port;
-        startReader(port);
     }
 
     /**
@@ -209,9 +217,10 @@ public class X4Connection implements AutoCloseable {
     public void disconnect() {
         if (serialPort != null) {
             Console.log("J1 closing " + serialPort.getPortName());
-            stopReader();
+            // The plugin goes first, while the reader still runs, in case
+            // it wants a last exchange with the device.
             plugin.stopComm();
-            closeQuietly(serialPort);
+            release(serialPort);
             serialPort = null;
         }
     }
@@ -235,8 +244,8 @@ public class X4Connection implements AutoCloseable {
     //  Internal helpers
     // ────────────────────────────────────────────────────────────────────────
 
-    private void startReader(SerialPort port) {
-        readerThread = new Thread(() -> readLoop(port), "imet-j1-reader");
+    private void startReader(SerialPort port, SerialPortTransport transport) {
+        readerThread = new Thread(() -> readLoop(port, transport), "imet-j1-reader");
         readerThread.setDaemon(true);
         readerThread.start();
         Console.log("J1 reader started");
@@ -261,12 +270,23 @@ public class X4Connection implements AutoCloseable {
         }
     }
 
+    /** Stops the reader, ends the plugin's transport, and closes the port. */
+    private void release(SerialPort port) {
+        stopReader();
+        if (transport != null) {
+            transport.close();
+            transport = null;
+        }
+        closeQuietly(port);
+    }
+
     /**
-     * Reader thread body: polls the port, passes each chunk to the receive
-     * listeners, and splits the bytes into lines for {@link #sendCommand}.
-     * Runs until interrupted by {@link #stopReader} or a serial error.
+     * Reader thread body: polls the port, passes each chunk to the plugin's
+     * transport and the receive listeners, and splits the bytes into lines
+     * for {@link #sendCommand}. Runs until interrupted by
+     * {@link #stopReader} or a serial error.
      */
-    private void readLoop(SerialPort port) {
+    private void readLoop(SerialPort port, SerialPortTransport transport) {
         StringBuilder line = new StringBuilder();
         try {
             while (!Thread.currentThread().isInterrupted()) {
@@ -277,6 +297,7 @@ public class X4Connection implements AutoCloseable {
                 }
                 byte[] chunk = port.readBytes(available);
 
+                transport.receive(chunk);
                 for (Consumer<byte[]> listener : receiveListeners) {
                     try {
                         listener.accept(chunk);
