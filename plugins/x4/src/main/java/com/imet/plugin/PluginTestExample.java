@@ -54,7 +54,7 @@ public class PluginTestExample implements PluginTest {
     @Override
     public synchronized byte[] messageType_q(byte[] arg) {
         String name = new String(arg, StandardCharsets.US_ASCII);
-        String key = settingFor(name);
+        String key = querySettingFor(name);
         if (key == null) {
             log("query [" + name + "] is not supported");
             return null;
@@ -192,6 +192,15 @@ public class PluginTestExample implements PluginTest {
             values.append(parts[i].trim());
         }
         return ascii(values.toString());
+    }
+
+    /* Maps a lexicon message to the X4 setting its query polls. Adds the
+       query-only messages to settingFor(). */
+    private static String querySettingFor(String messageName) {
+        if (messageName.equals("boardDataFormat")) {
+            return "CBD";
+        }
+        return settingFor(messageName);
     }
 
     /* Maps a lexicon message to the X4 setting it polls and assigns

@@ -146,6 +146,7 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
                 "toggleDataPublishing (command)",
                 "j3BaudRate (query)",
                 "j3BaudRate (command)",
+                "boardDataFormat (query)",
                 "configurePortToEmpty (parameterized query)",
                 "configurePortToAirThermistor (parameterized query)",
                 "configurePortToHYT271 (parameterized query)",
