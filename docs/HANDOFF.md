@@ -108,14 +108,20 @@ skipping streamed data lines.
   - A setting with no reply is named in `X4Settings.missing()` and reported
     on screen. After two unanswered queries in a row the rest are skipped.
   - `X4Connection.sendCommand` has been removed.
-- **Configure X4 (#26):** `X4Connection.configure(wanted)` writes every
-  setting on the Configuration screen (`X4SettingsWriter`), waits for the X4
-  to ACK again, reads all the settings back, and returns the names of any
-  the X4 doesn't hold as asked. The X4 never acknowledges an assignment, so
-  the read-back is the only check. The other screens are then given the new
-  settings. A port showing "Other (left unchanged)" is not written. Board
-  data is always written as `/CBD=0,0` (SoW #16), so a device on the factory
-  `0,30720` gains the four battery columns the first time it is configured.
+- **Configure X4 (#26):** `X4Connection.configure(wanted)` brings the X4
+  to the Configuration screen's settings (`X4SettingsWriter`), then reads
+  all the settings back and returns the names of any the X4 doesn't hold as
+  asked. The other screens are then given the new settings.
+  - Each setting is handled on its own: ask the X4 what it has, send the
+    assignment only if that differs, ask again, and resend up to three
+    times. The X4 never acknowledges an assignment, and a real X4 ignored
+    `/DPF=3` sent in a burst 150 ms after `/SRN=` (2026-11-12, twice; cause
+    unknown), so a burst of assignments can't be trusted.
+  - Order: board data format and ports first, then serial number, bias, J3
+    baud, frequency, and data on/off last.
+  - A port showing "Other (left unchanged)" is not written.
+  - Board data is always `/CBD=0,0` (SoW #16), so a device on the factory
+    `0,30720` gains the four battery columns the first time.
 - **Console:** every J1 op, raw byte, reply and plugin decision is logged with
   timestamps. The console test menu (stdin) is ON: `CONSOLE_TEST_ENABLED` in
   `MainFrame`. It exercises plugin messages over the GUI's J1 connection.
@@ -164,7 +170,7 @@ I checked the layout against XS on Windows; it looks good.
 | 22 Restore Defaults | Button disabled; TBD in the SoW. |
 | 23 Fetch | Not implemented, as the SoW says. |
 | 24, 25 Load from File, Save to File | Buttons disabled; TBD in the SoW. |
-| 26 Configure X4 | Done, with read-back check. Not yet tried on a real X4. |
+| 26 Configure X4 | Done, with per-setting verify and resend. First real-X4 try (burst write) lost `/DPF`; the per-setting version is not yet tried on a real X4. |
 
 ## Open items, most pressing first
 

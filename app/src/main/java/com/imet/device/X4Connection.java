@@ -173,9 +173,10 @@ public class X4Connection implements AutoCloseable {
     }
 
     /**
-     * Writes settings to the device, then reads the device's settings
-     * back and keeps them for {@link #getSettings} (SoW #26). Takes a few
-     * seconds, so don't call it on the EDT. Never throws.
+     * Brings the device to the given settings, sending only those it
+     * doesn't already hold, then reads all its settings back and keeps
+     * them for {@link #getSettings} (SoW #26). Takes a few seconds, so
+     * don't call it on the EDT. Never throws.
      *
      * @param wanted the settings to write, from {@link X4Settings#toWrite}
      * @return the settings the device does not now hold as asked, by name;

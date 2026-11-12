@@ -11,77 +11,165 @@ import java.util.List;
  * Writes a configuration to the X4 through the X4 plugin (SoW #26), and
  * checks what the device holds afterwards.
  *
- * <p>The X4 doesn't reply to an assignment, so the only way to know a
- * setting was taken is to read it back; {@link #differences} does the
- * comparison.
+ * <p>The X4 doesn't reply to an assignment, and a real X4 has been seen
+ * to ignore one sent in a burst with others (2026-11-12: /DPF=3 sent
+ * 150 ms after /SRN= was not taken, twice). So each setting is handled on
+ * its own: ask the device what it has, send the assignment only if that
+ * differs, ask again, and send again if it still differs. Waiting for the
+ * reply to each question also paces the commands to the device.
  *
  * <p>Lexicon commands used (the X4 command each sends in brackets):
  * <pre>
- *   serialNumber (/SRN=)          dataPublishingFrequency (/DPF=)
- *   pressureBias (/CPB=)          j3BaudRate (/CJ3=)
  *   resetBoardData (/CBD=0,0)     configurePortTo... (/CJ4= - /CJ9=)
+ *   serialNumber (/SRN=)          pressureBias (/CPB=)
+ *   j3BaudRate (/CJ3=)            dataPublishingFrequency (/DPF=)
  *   toggleDataPublishing (/TDP=)
  * </pre>
  */
 final class X4SettingsWriter {
 
-    /** Pause after each command, so the X4 isn't sent a burst. */
+    /** How long to give the X4 to act on a command before asking about it. */
     private static final int COMMAND_GAP_MS = 150;
 
+    /** How many times a setting is sent before giving up on it. */
+    private static final int SENDS_PER_SETTING = 3;
+
     /**
-     * How many times to ask the X4 for an ACK after the last command
-     * before reading the settings back. A real X4 publishes nothing for
-     * two to three seconds after its data format changes (measured
-     * 2026-11-12), and each try waits the plugin's 2 s timeout.
+     * After this many questions in a row get no reply, stop: the X4 has
+     * gone, and each further question would cost the plugin's full
+     * timeout.
      */
-    private static final int ACK_TRIES = 5;
+    private static final int MAX_SILENCES_IN_A_ROW = 3;
 
-    private X4SettingsWriter() { }
+    private final PluginTest plugin;
+    private int silencesInARow;
+
+    private X4SettingsWriter(PluginTest plugin) {
+        this.plugin = plugin;
+    }
 
     /**
-     * Sends every setting in {@code wanted}, then waits until the device
-     * answers an ACK again. A port that {@code wanted} has no entry for
-     * is not written.
+     * Brings the device to {@code wanted}, one setting at a time. A port
+     * that {@code wanted} has no entry for is not written. Never throws;
+     * use {@link #differences} on a fresh read to see what was taken.
      */
     static void write(PluginTest plugin, X4Settings wanted) {
-        command(plugin, "serialNumber=" + wanted.serialNumber());
-        command(plugin, "dataPublishingFrequency=" + wanted.dataPublishingFrequency());
-        command(plugin, "pressureBias=" + wanted.pressureBias());
-        command(plugin, "j3BaudRate=" + wanted.j3BaudRate());
-        command(plugin, "resetBoardData");
+        new X4SettingsWriter(plugin).write(wanted);
+    }
+
+    private void write(X4Settings wanted) {
+        // The data format first: the X4 goes quiet for a moment after each
+        // of these, and nothing else should be waiting on it then.
+        set("Board data format", "resetBoardData",
+                () -> same(query("boardDataFormat"), wanted.boardDataFormat()));
 
         for (int port = X4Settings.FIRST_PORT; port <= X4Settings.LAST_PORT; port++) {
             X4Settings.Port setting = wanted.port(port);
             if (setting == null) {
                 continue;
             }
+            String command;
             switch (setting.sensorId()) {
                 case X4Settings.SENSOR_NONE ->
-                        command(plugin, "configurePortToEmpty=" + port);
+                        command = "configurePortToEmpty=" + port;
                 case X4Settings.SENSOR_TEMPERATURE ->
-                        command(plugin, "configurePortToAirThermistor=" + port
-                                + "," + setting.values());
+                        command = "configurePortToAirThermistor=" + port
+                                + "," + setting.values();
                 case X4Settings.SENSOR_HUMIDITY ->
-                        command(plugin, "configurePortToHYT271=" + port
-                                + "," + setting.values());
+                        command = "configurePortToHYT271=" + port
+                                + "," + setting.values();
                 case X4Settings.SENSOR_SERIAL_FORWARD ->
-                        command(plugin, "configurePortToSerialForward=" + port
-                                + "," + setting.values());
-                default -> Console.log("J" + port + " not written: no command for sensor "
-                        + setting.sensorId());
+                        command = "configurePortToSerialForward=" + port
+                                + "," + setting.values();
+                default -> {
+                    Console.log("J" + port + " not written: no command for sensor "
+                            + setting.sensorId());
+                    continue;
+                }
             }
+            final int p = port;
+            set("J" + port, command, () -> {
+                X4Settings.Port now = X4SettingsReader.readPort(plugin, p);
+                return (now == null) ? null : samePort(setting, now);
+            });
         }
+
+        set("X4 Serial Number", "serialNumber=" + wanted.serialNumber(),
+                () -> same(query("serialNumber"), wanted.serialNumber()));
+        set("Pressure Bias", "pressureBias=" + wanted.pressureBias(),
+                () -> sameNumberOrNull(query("pressureBias"), wanted.pressureBias()));
+        set("J3 Baud Rate", "j3BaudRate=" + wanted.j3BaudRate(),
+                () -> same(query("j3BaudRate"), wanted.j3BaudRate()));
+        set("Data Publishing Freq.",
+                "dataPublishingFrequency=" + wanted.dataPublishingFrequency(),
+                () -> sameNumberOrNull(query("dataPublishingFrequency"),
+                        wanted.dataPublishingFrequency()));
 
         // Last, so data starts (or stops) in the new format.
-        command(plugin, "toggleDataPublishing=" + (wanted.dataPublishing() ? "1" : "0"));
+        String tdp = wanted.dataPublishing() ? "1" : "0";
+        set("Data", "toggleDataPublishing=" + tdp,
+                () -> same(query("toggleDataPublishing"), tdp));
+    }
 
-        for (int attempt = 1; attempt <= ACK_TRIES; attempt++) {
-            byte[] ack = plugin.messageType_q(bytes("acknowledgeDevice"));
-            if (ack != null && ack.length == 1 && ack[0] == '1') {
+    /** Answers "does the device hold this setting as wanted?", or null for no reply. */
+    private interface Check {
+        Boolean holds();
+    }
+
+    /**
+     * Makes one setting hold: sends {@code command} unless the device
+     * already has it, and again if the device doesn't have it afterwards.
+     */
+    private void set(String name, String command, Check check) {
+        for (int sends = 0; ; sends++) {
+            if (silencesInARow >= MAX_SILENCES_IN_A_ROW) {
                 return;
             }
-            Console.log("X4 not answering after the configuration (try " + attempt + ")");
+            Boolean holds = check.holds();
+            if (holds == null) {
+                if (++silencesInARow == MAX_SILENCES_IN_A_ROW) {
+                    Console.log("X4 stopped answering; not writing the remaining settings");
+                }
+            } else {
+                silencesInARow = 0;
+                if (holds) {
+                    if (sends > 1) {
+                        Console.log(name + " taken on send " + sends);
+                    }
+                    return;
+                }
+            }
+            if (sends == SENDS_PER_SETTING) {
+                Console.log(name + " not taken after " + sends + " sends");
+                return;
+            }
+            plugin.messageType_c(bytes(command));
+            try {
+                Thread.sleep(COMMAND_GAP_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
+    }
+
+    private String query(String message) {
+        byte[] reply = plugin.messageType_q(bytes(message));
+        return (reply == null) ? null
+                : new String(reply, StandardCharsets.US_ASCII).trim();
+    }
+
+    private static Boolean same(String got, String wanted) {
+        return (got == null) ? null : got.equals(wanted);
+    }
+
+    private static Boolean sameNumberOrNull(String got, String wanted) {
+        return (got == null) ? null : sameNumber(wanted, got);
+    }
+
+    private static boolean samePort(X4Settings.Port asked, X4Settings.Port got) {
+        return got.sensorId() == asked.sensorId()
+                && sameValues(asked.values(), got.values());
     }
 
     /**
@@ -121,8 +209,7 @@ final class X4SettingsWriter {
                 continue; // not written
             }
             X4Settings.Port got = now.port(port);
-            if (got == null || got.sensorId() != asked.sensorId()
-                    || !sameValues(asked.values(), got.values())) {
+            if (got == null || !samePort(asked, got)) {
                 different.add("J" + port);
             }
         }
@@ -174,15 +261,6 @@ final class X4SettingsWriter {
 
     private static boolean isHex(String s) {
         return s.length() > 2 && (s.startsWith("0x") || s.startsWith("0X"));
-    }
-
-    private static void command(PluginTest plugin, String command) {
-        plugin.messageType_c(bytes(command));
-        try {
-            Thread.sleep(COMMAND_GAP_MS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 
     private static byte[] bytes(String s) {

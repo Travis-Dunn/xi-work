@@ -63,6 +63,7 @@ class FakeX4:
         for item in args.set:
             key, _, value = item.partition("=")
             self.settings[key.upper()] = value
+        self.assignments = 0
         self.started = time.time()
         self.next_line = time.time()
         self.card = (b"" if args.card_bytes < 0
@@ -218,7 +219,10 @@ class FakeX4:
             if key == "SRN" and self.args.no_srn:
                 return
             if key in self.settings:
-                self.reply(key + "=" + self.settings[key])
+                value = self.settings[key]
+                if key == "DPF":
+                    value = "%.6f" % self.frequency()  # as a real X4 prints it
+                self.reply(key + "=" + value)
         elif "=" in line:
             key, _, value = line.partition("=")
             self.assign(key.upper(), value)
@@ -227,6 +231,9 @@ class FakeX4:
         """Assignments return nothing (manual 3.3.1)."""
         if key not in self.settings:
             return
+        self.assignments += 1
+        if self.args.flaky and self.assignments % self.args.flaky == 0:
+            return  # ignored, as a real X4 has been seen to do
         if key == "DPF":
             try:
                 ok = 0 <= float(value) < 10  # a real X4 rejects 10
@@ -289,6 +296,8 @@ def main():
                    help="never reply (data still streams)")
     p.add_argument("--no-srn", action="store_true",
                    help="don't answer /SRN?")
+    p.add_argument("--flaky", type=int, default=0, metavar="N",
+                   help="ignore every Nth assignment")
     p.add_argument("--collide", action="store_true",
                    help="publish a data line right before each reply")
     p.add_argument("--no-gps", action="store_true",
