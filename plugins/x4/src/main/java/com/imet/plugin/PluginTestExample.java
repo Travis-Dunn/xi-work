@@ -13,6 +13,16 @@ public class PluginTestExample implements PluginTest {
        reasoning as the ACK. */
     private static final long REPLY_TIMEOUT_MS = 2000;
 
+    /* How long to wait after sending an assignment before anything else
+       may be sent. While it is publishing data, the X4 acts on a command
+       only once per publishing cycle, about every 0.7 s, and a command
+       still waiting when another arrives is lost: /DPF=4 followed 150 ms
+       later by /DPF? got the reply to /DPF? and never took the 4 (real
+       X4, 2026-11-12). An assignment has no reply to wait for, so the
+       only way to let it through is to stay quiet for longer than a
+       cycle. */
+    private static final long ASSIGNMENT_SETTLE_MS = 1500;
+
     /* Sensor IDs used with /CJ4-/CJ9 (manual 4.3). */
     private static final int SENSOR_NONE = 0;
     private static final int SENSOR_TEMPERATURE = 3;
@@ -77,7 +87,8 @@ public class PluginTestExample implements PluginTest {
 
     /* Command. arg is "<lexicon message name>=<value>", e.g.
        "serialNumber=1234". Sends the assignment (e.g. /SRN=1234). The X4
-       doesn't reply to assignments, so there is nothing to wait for.
+       doesn't reply to assignments; this returns ASSIGNMENT_SETTLE_MS
+       after sending, once the X4 has had time to act on it.
 
        The configurePortTo... commands take the port number 4-9 first,
        then the sensor's settings as the matching parameterized query
@@ -127,7 +138,10 @@ public class PluginTestExample implements PluginTest {
         send(name, "/" + key + "=" + value);
     }
 
-    /* Sends one command line for the lexicon command `name`. */
+    /* Sends one command line for the lexicon command `name`, then keeps
+       the line quiet while the X4 gets to it (see ASSIGNMENT_SETTLE_MS).
+       This runs inside a synchronized call, so no other message can be
+       sent meanwhile. */
     private void send(String name, String line) {
         if (!isConnected()) {
             log("command [" + name + "] needs a J1 connection");
@@ -135,8 +149,11 @@ public class PluginTestExample implements PluginTest {
         }
         try {
             transport.write((line + "\r\n").getBytes(StandardCharsets.US_ASCII));
+            Thread.sleep(ASSIGNMENT_SETTLE_MS);
         } catch (IOException e) {
             log("command [" + name + "] failed: " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
