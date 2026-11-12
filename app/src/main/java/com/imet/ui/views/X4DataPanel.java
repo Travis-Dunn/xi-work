@@ -1,5 +1,8 @@
 package com.imet.ui.views;
 
+import com.imet.AppPaths;
+import com.imet.Console;
+import com.imet.device.DataLog;
 import com.imet.device.X4Connection;
 import com.imet.device.X4DataFormat;
 import com.imet.device.X4Settings;
@@ -8,6 +11,11 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -26,7 +34,8 @@ import java.util.function.Consumer;
  *
  * <p>The J1 terminal is live, and the board and port fields show the
  * latest data line once the X4's settings have been read (see
- * {@link #setConnection}). The buttons have no actions yet. Which data
+ * {@link #setConnection}). Logging and Mark work; the card buttons have
+ * no actions yet. Which data
  * column feeds which field is described in {@code docs/x4-data-format.md}.
  */
 public class X4DataPanel extends JPanel {
@@ -154,12 +163,34 @@ public class X4DataPanel extends JPanel {
     /** J1 connection feeding the J1 terminal; null when disconnected. */
     private X4Connection connection;
 
-    /** Hands J1 bytes from the connection's reader thread to the EDT. */
-    private final Consumer<byte[]> j1Receiver =
-            data -> SwingUtilities.invokeLater(() -> {
-                j1Terminal.append(data);
-                parseData(data);
-            });
+    // ── Logging (#37, #38) ───────────────────────────────────────────────────
+
+    /** The log being written; null when not logging. Set on the EDT. */
+    private volatile DataLog log;
+
+    /** Says which file is being logged to, or why logging stopped. */
+    private JLabel logStatusLabel;
+
+    /**
+     * Called on the connection's reader thread with each chunk from J1.
+     * The log is written here, off the EDT; the terminal and fields are
+     * updated on the EDT.
+     */
+    private final Consumer<byte[]> j1Receiver = data -> {
+        DataLog current = log;
+        if (current != null) {
+            try {
+                current.write(data);
+            } catch (IOException e) {
+                SwingUtilities.invokeLater(() -> logFailed(current, e));
+            }
+        }
+        SwingUtilities.invokeLater(() -> {
+            j1Terminal.append(data);
+            parseData(data);
+        });
+    };
+
 
     // ── Data lines ───────────────────────────────────────────────────────────
 
@@ -261,10 +292,15 @@ public class X4DataPanel extends JPanel {
         if (connection != null) {
             connection.removeReceiveListener(j1Receiver);
         }
+        if (conn != connection) {
+            // Nothing more will arrive on the old connection.
+            stopLogging();
+        }
         connection = conn;
         if (conn != null) {
             conn.addReceiveListener(j1Receiver);
         }
+        logButton.setEnabled(conn != null);
 
         settingsChanged((conn != null) ? conn.getSettings() : null);
     }
@@ -416,6 +452,148 @@ public class X4DataPanel extends JPanel {
         headingRow.add(statusLabel);
 
         return headingRow;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    //  Logging and Mark (#37, #38)
+    // ────────────────────────────────────────────────────────────────────────
+
+    private static final DateTimeFormatter LOG_NAME_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
+
+    /** The Start Logging / Stop Logging button. */
+    private void onLogButton() {
+        if (log != null) {
+            stopLogging();
+            return;
+        }
+        Path file = chooseLogFile();
+        if (file != null) {
+            startLogging(file);
+        }
+    }
+
+    /**
+     * Asks where to save the log: a .txt file, by default in the Data
+     * folder under the install directory (#37).
+     *
+     * @return the file, or {@code null} if the user cancelled
+     */
+    private Path chooseLogFile() {
+        Path dir = AppPaths.dataDir();
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            // E.g. no permission in the install directory. The dialog
+            // then opens in the user's own folder.
+            Console.log("Could not create " + dir + ": " + e);
+        }
+
+        JFileChooser chooser = new JFileChooser(Files.isDirectory(dir) ? dir.toFile() : null);
+        chooser.setDialogTitle("Start Logging");
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+                "Text files (*.txt)", "txt"));
+        chooser.setSelectedFile(new java.io.File(chooser.getCurrentDirectory(),
+                "X4_" + LocalDateTime.now().format(LOG_NAME_TIME) + ".txt"));
+
+        while (true) {
+            if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+                return null;
+            }
+            Path file = chooser.getSelectedFile().toPath();
+            if (!file.getFileName().toString().contains(".")) {
+                file = file.resolveSibling(file.getFileName() + ".txt");
+            }
+            if (!Files.exists(file)) {
+                return file;
+            }
+            int answer = JOptionPane.showConfirmDialog(this,
+                    file.getFileName() + " already exists. Replace it?",
+                    "Start Logging", JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+            if (answer == JOptionPane.YES_OPTION) {
+                return file;
+            }
+            chooser.setSelectedFile(file.toFile());
+        }
+    }
+
+    /** Starts recording J1 to {@code file}, replacing any file there. */
+    private void startLogging(Path file) {
+        try {
+            log = new DataLog(file);
+        } catch (IOException e) {
+            Console.log("Could not start logging to " + file + ": " + e);
+            showLogStatus("Could not create " + file.getFileName()
+                    + ": " + reason(e), ERROR_RED);
+            return;
+        }
+        Console.log("Logging J1 to " + file);
+        logButton.setText("Stop Logging");
+        markButton.setEnabled(true);
+        showLogStatus("Logging to " + file.getFileName(), STATUS_GREY);
+        logStatusLabel.setToolTipText(file.toString());
+    }
+
+    /** Stops recording, if recording. */
+    private void stopLogging() {
+        DataLog current = log;
+        if (current == null) {
+            return;
+        }
+        log = null;
+        logButton.setText("Start Logging");
+        markButton.setEnabled(false);
+        try {
+            current.close();
+            Console.log("Stopped logging to " + current.file());
+            showLogStatus("Saved " + current.file().getFileName(), STATUS_GREY);
+        } catch (IOException e) {
+            Console.log("Could not finish " + current.file() + ": " + e);
+            showLogStatus("Could not finish " + current.file().getFileName()
+                    + ": " + reason(e), ERROR_RED);
+        }
+    }
+
+    /** Called on the EDT when a write to the log failed on the reader thread. */
+    private void logFailed(DataLog failed, IOException e) {
+        if (log != failed) {
+            return; // already stopped
+        }
+        Console.log("Logging to " + failed.file() + " failed: " + e);
+        stopLogging();
+        showLogStatus("Logging stopped: could not write "
+                + failed.file().getFileName() + ": " + reason(e), ERROR_RED);
+    }
+
+    /** Puts the text in the mark field into the log, on a line of its own (#38). */
+    private void onMark() {
+        DataLog current = log;
+        if (current == null) {
+            return;
+        }
+        try {
+            current.mark(markField.getText());
+        } catch (IOException e) {
+            logFailed(current, e);
+        }
+    }
+
+    private void showLogStatus(String text, Color color) {
+        logStatusLabel.setText(text);
+        logStatusLabel.setForeground(color);
+        logStatusLabel.setToolTipText(null);
+    }
+
+    /** A file error in words; these exceptions' own messages are just the path. */
+    private static String reason(IOException e) {
+        if (e instanceof java.nio.file.NoSuchFileException) {
+            return "the folder does not exist";
+        }
+        if (e instanceof java.nio.file.AccessDeniedException) {
+            return "permission denied";
+        }
+        return (e.getMessage() != null) ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -648,19 +826,30 @@ public class X4DataPanel extends JPanel {
         logButton.setPreferredSize(new Dimension(
                 logButton.getFontMetrics(logButton.getFont())
                         .stringWidth("Stop Logging") + 32, 32));
+        logButton.setEnabled(false); // until J1 connects
+        logButton.addActionListener(e -> onLogButton());
         right.add(logButton);
 
         markButton = createStyledButton("Mark");
         markButton.setEnabled(false); // no log open yet
+        markButton.addActionListener(e -> onMark());
         right.add(markButton);
 
         markField = new JTextField(14);
         markField.putClientProperty("JTextField.placeholderText", "Mark:");
         markField.setPreferredSize(new Dimension(
                 markField.getPreferredSize().width, 32));
+        markField.addActionListener(e -> onMark()); // Enter in the field
         right.add(markField);
 
         bar.add(right, BorderLayout.EAST);
+
+        // Between the two groups: which file is being logged to, or what
+        // went wrong (#6).
+        logStatusLabel = new JLabel("", SwingConstants.RIGHT);
+        logStatusLabel.setFont(logStatusLabel.getFont().deriveFont(Font.PLAIN, 12f));
+        logStatusLabel.setBorder(BorderFactory.createEmptyBorder(0, 12, 0, 4));
+        bar.add(logStatusLabel, BorderLayout.CENTER);
         return bar;
     }
 

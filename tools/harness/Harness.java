@@ -93,6 +93,41 @@ public class Harness {
                 + " srn=" + ((JTextField) get(cp, "srnField")).getText() + " dpf=" + ((JSpinner) get(cp, "dpfSpinner")).getValue()
                 + " cpb=" + ((JSpinner) get(cp, "cpbSpinner")).getValue() + " tcal1=" + tcal(sensor(cp, 9))[0].getText());
     }
+    /* LOG=1: log to a file (skipping the file dialog), mark twice, stop. */
+    static void logging(Object dp, String out, String tag) throws Exception {
+        java.nio.file.Path file = java.nio.file.Path.of(out, tag + "-log.txt");
+        Method start = dp.getClass().getDeclaredMethod("startLogging", java.nio.file.Path.class);
+        start.setAccessible(true);
+        JButton logButton = (JButton) get(dp, "logButton"), markButton = (JButton) get(dp, "markButton");
+        JTextField markField = (JTextField) get(dp, "markField");
+        JLabel status = (JLabel) get(dp, "logStatusLabel");
+        // The real button: check what the file dialog offers, then cancel it.
+        SwingUtilities.invokeLater(logButton::doClick);
+        JFileChooser chooser = null;
+        for (int i = 0; i < 50 && chooser == null; i++) {
+            Thread.sleep(100);
+            for (Window w : Window.getWindows()) if (w instanceof JDialog d && d.isVisible()) chooser = find(d.getContentPane(), JFileChooser.class);
+        }
+        if (chooser != null) {
+            final JFileChooser c = chooser;
+            System.out.println("HARNESS log dialog offers " + c.getSelectedFile() + " filter=[" + c.getFileFilter().getDescription() + "]");
+            SwingUtilities.invokeAndWait(c::cancelSelection);
+            Thread.sleep(300);
+        } else System.out.println("HARNESS log dialog did not open");
+        System.out.println("HARNESS log before: button=[" + logButton.getText() + "] enabled=" + logButton.isEnabled() + " mark enabled=" + markButton.isEnabled());
+        SwingUtilities.invokeAndWait(() -> { try { start.invoke(dp, file); } catch (Exception e) { throw new RuntimeException(e); } });
+        System.out.println("HARNESS log started: button=[" + logButton.getText() + "] mark enabled=" + markButton.isEnabled() + " status=[" + status.getText() + "]");
+        Thread.sleep(1500);
+        SwingUtilities.invokeAndWait(() -> { markField.setText("ref 21.5 C"); markButton.doClick(); });
+        Thread.sleep(1700);
+        SwingUtilities.invokeAndWait(() -> { markField.setText("second"); markField.postActionEvent(); });
+        Thread.sleep(1200);
+        SwingUtilities.invokeAndWait(logButton::doClick);   // Stop Logging
+        System.out.println("HARNESS log stopped: button=[" + logButton.getText() + "] mark enabled=" + markButton.isEnabled() + " status=[" + status.getText() + "]");
+        // Starting where nothing can be created must say so.
+        SwingUtilities.invokeAndWait(() -> { try { start.invoke(dp, java.nio.file.Path.of(out, "no-such-dir", "x.txt")); } catch (Exception e) { throw new RuntimeException(e); } });
+        System.out.println("HARNESS log bad path: button=[" + logButton.getText() + "] status=[" + status.getText() + "]");
+    }
     public static void main(String[] a) throws Exception {
         String port = a[0], out = a[1], tag = a.length > 2 ? a[2] : "run";
         com.imet.App.main(new String[0]);
@@ -150,6 +185,7 @@ public class Harness {
             com.imet.ui.views.X4DataPanel dp = find(tab, com.imet.ui.views.X4DataPanel.class);
             System.out.println("HARNESS data status=[" + ((JLabel) get(dp, "statusLabel")).getText() + "] portRows=" + ((Map<?, ?>) get(dp, "portFields")).keySet());
             System.out.println("HARNESS data " + dataFields(dp));
+            if (System.getenv("LOG") != null) logging(dp, out, tag);
             shot(frame.getContentPane(), out + "/" + tag + "-data.png");
             if (a.length > 3) {
                 // Send the device a command behind the app's back, as another

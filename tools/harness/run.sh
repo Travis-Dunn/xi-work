@@ -12,6 +12,8 @@
 # Set CONFIGURE=1 to also fill in the Configuration screen and click
 # Configure X4 (once with a blank TCal4, then corrected).
 #
+# Set LOG=1 to also log J1 to out/<tag>-log.txt with two marks.
+#
 # Output goes to tools/harness/out/: <tag>-config.png, <tag>-data.png,
 # and the app's console log in out-<tag>.log.
 set -u

@@ -166,8 +166,8 @@ skipping streamed data lines.
 | 34 J3 terminal | Layout only; J3 has no reader. |
 | 35 Erase Card | Button only. |
 | 36 Get from Card + progress | Button and hidden progress bar only. |
-| 37 Start/Stop Logging | Button only. |
-| 38 Mark | Button and text field only. |
+| 37 Start/Stop Logging | Done. Records J1 byte for byte (`DataLog`); the save dialog opens in `<install dir>/Data` with a timestamped `.txt` name. Stops on disconnect. |
+| 38 Mark | Done. `Mark: <text>\r\n` on a line of its own: a mark made mid-line waits for that line's end. Enter in the field also marks. |
 | 39 X4 picture | Done. |
 
 I checked the layout against XS on Windows; it looks good.
@@ -262,8 +262,7 @@ I checked the layout against XS on Windows; it looks good.
 
 1. J3 reader and terminal (#34). If Configure X4 changes the J3 baud while
    J3 is connected, the J3 connection is left at the old rate.
-2. Logging and Mark (#37, #38).
-3. Card buttons (#35, #36).
+2. Card buttons (#35, #36).
 4. Waiting on the client: the TCal "Load from File" (needs a sample
    calibration file), and Restore Defaults, Load from File and Save to File
    (#22, #24, #25, TBD in the SoW). Their buttons are shown but disabled.

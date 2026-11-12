@@ -37,6 +37,14 @@ public final class AppPaths {
         return HOME.resolve("plugins");
     }
 
+    /**
+     * Returns {@code <home>/Data}, where log files go by default (SoW #37).
+     * It may not exist yet.
+     */
+    public static Path dataDir() {
+        return HOME.resolve("Data");
+    }
+
     private static Path resolveHome() {
         // 1. Explicit override.
         String override = System.getProperty("imet.home");
