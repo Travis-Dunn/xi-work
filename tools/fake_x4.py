@@ -63,10 +63,10 @@ class FakeX4:
         for item in args.set:
             key, _, value = item.partition("=")
             self.settings[key.upper()] = value
-        self.card = (b"" if args.card_bytes < 0
-                     else self.card_contents(args.card_bytes))
         self.started = time.time()
         self.next_line = time.time()
+        self.card = (b"" if args.card_bytes < 0
+                     else self.card_contents(args.card_bytes))
 
         self.master, self.slave = os.openpty()
         tty.setraw(self.slave)  # no echo, no CR/LF translation
