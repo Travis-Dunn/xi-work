@@ -172,25 +172,54 @@ public class X4Connection implements AutoCloseable {
         return read;
     }
 
+    /** How many times {@link #configure} sends what the device lacks. */
+    private static final int CONFIGURE_PASSES = 3;
+
     /**
-     * Brings the device to the given settings, sending only those it
-     * doesn't already hold, then reads all its settings back and keeps
-     * them for {@link #getSettings} (SoW #26). Takes a few seconds, so
-     * don't call it on the EDT. Never throws.
+     * Brings the device to the given settings (SoW #26): sends the ones
+     * that differ from what the device was last known to hold, reads all
+     * its settings back, and repeats for any that still differ. The
+     * device's settings as last read are kept for {@link #getSettings}.
+     * Takes from a few seconds to tens of seconds, depending on how much
+     * changes and how fast the device answers, so don't call it on the
+     * EDT. Never throws.
      *
      * @param wanted the settings to write, from {@link X4Settings#toWrite}
      * @return the settings the device does not now hold as asked, by name;
-     *         empty if it took them all
+     *         empty if it holds them all
      */
     public List<String> configure(X4Settings wanted) {
         Console.log("J1 configuring the X4");
-        X4SettingsWriter.write(plugin, wanted);
-        X4Settings now = readSettings();
+        X4Settings now = settings;
+        boolean readSinceWrite = false;
+
+        for (int pass = 1; pass <= CONFIGURE_PASSES; pass++) {
+            if (now != null) {
+                if (!now.isComplete()) {
+                    // Can't tell what it holds; don't write blind.
+                    break;
+                }
+                List<String> lacking = X4SettingsWriter.differences(wanted, now);
+                if (lacking.isEmpty() && readSinceWrite) {
+                    break;
+                }
+                if (!lacking.isEmpty()) {
+                    Console.log("J1 sending (pass " + pass + "): "
+                            + String.join(", ", lacking));
+                    X4SettingsWriter.write(plugin, wanted, lacking);
+                }
+            }
+            // Always at least one read: the device may have been changed
+            // since the settings were last read.
+            now = readSettings();
+            readSinceWrite = true;
+        }
+
         List<String> refused = X4SettingsWriter.differences(wanted, now);
         if (refused.isEmpty()) {
             Console.log("X4 configured");
         } else {
-            Console.log("X4 did not take: " + String.join(", ", refused));
+            Console.log("X4 does not hold: " + String.join(", ", refused));
         }
         return refused;
     }

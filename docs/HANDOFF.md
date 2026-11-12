@@ -108,20 +108,33 @@ skipping streamed data lines.
   - A setting with no reply is named in `X4Settings.missing()` and reported
     on screen. After two unanswered queries in a row the rest are skipped.
   - `X4Connection.sendCommand` has been removed.
-- **Configure X4 (#26):** `X4Connection.configure(wanted)` brings the X4
-  to the Configuration screen's settings (`X4SettingsWriter`), then reads
-  all the settings back and returns the names of any the X4 doesn't hold as
-  asked. The other screens are then given the new settings.
-  - Each setting is handled on its own: ask the X4 what it has, send the
-    assignment only if that differs, ask again, and resend up to three
-    times. The X4 never acknowledges an assignment, and a real X4 ignored
-    `/DPF=3` sent in a burst 150 ms after `/SRN=` (2026-11-12, twice; cause
-    unknown), so a burst of assignments can't be trusted.
+- **Configure X4 (#26):** `X4Connection.configure(wanted)` sends the
+  settings that differ from what the X4 was last known to hold
+  (`X4SettingsWriter`), reads all the settings back, and repeats for any
+  that still differ, up to three passes. It returns the names of any the X4
+  still doesn't hold. The other screens are then given the new settings.
+  - The X4 never acknowledges an assignment, so the read-back is the check.
+  - The plugin waits 1.5 s after every assignment before anything else can
+    be sent (`ASSIGNMENT_SETTLE_MS`); see "How the X4 handles commands".
+    That is why only differing settings are sent.
   - Order: board data format and ports first, then serial number, bias, J3
     baud, frequency, and data on/off last.
   - A port showing "Other (left unchanged)" is not written.
   - Board data is always `/CBD=0,0` (SoW #16), so a device on the factory
     `0,30720` gains the four battery columns the first time.
+- **How the X4 handles commands** (worked out from real-X4 logs,
+  2026-11-12; not from the manual):
+  - While publishing, the X4 acts on commands once per publishing cycle,
+    just before it sends a data line. A cycle takes about 0.7 s however
+    high DPF is set (at DPF=3 the uptime still steps by 0.70).
+  - At DPF=1 there is a gap of about 0.3 s after each line in which
+    commands are answered within 20 ms. At DPF of about 1.4 and above
+    there is no gap, and every reply takes up to 0.7 s.
+  - Only one command can wait. `/DPF=4` followed 150 ms later by `/DPF?`
+    got the reply to `/DPF?` and the 4 was never taken.
+  - This also explains the reply latency in open item 1: a 500 ms timeout
+    is shorter than a cycle.
+  - `tools/fake_x4.py` behaves this way by default (`--busy`).
 - **Console:** every J1 op, raw byte, reply and plugin decision is logged with
   timestamps. The console test menu (stdin) is ON: `CONSOLE_TEST_ENABLED` in
   `MainFrame`. It exercises plugin messages over the GUI's J1 connection.
@@ -170,7 +183,7 @@ I checked the layout against XS on Windows; it looks good.
 | 22 Restore Defaults | Button disabled; TBD in the SoW. |
 | 23 Fetch | Not implemented, as the SoW says. |
 | 24, 25 Load from File, Save to File | Buttons disabled; TBD in the SoW. |
-| 26 Configure X4 | Done, with per-setting verify and resend. First real-X4 try (burst write) lost `/DPF`; the per-setting version is not yet tried on a real X4. |
+| 26 Configure X4 | Done. Two real-X4 tries lost `/DPF=` because another command followed it too closely; the paced version is not yet tried on a real X4. |
 
 ## Open items, most pressing first
 

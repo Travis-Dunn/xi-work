@@ -9,14 +9,17 @@ import java.util.List;
 
 /**
  * Writes a configuration to the X4 through the X4 plugin (SoW #26), and
- * checks what the device holds afterwards.
+ * compares configurations.
  *
- * <p>The X4 doesn't reply to an assignment, and a real X4 has been seen
- * to ignore one sent in a burst with others (2026-11-12: /DPF=3 sent
- * 150 ms after /SRN= was not taken, twice). So each setting is handled on
- * its own: ask the device what it has, send the assignment only if that
- * differs, ask again, and send again if it still differs. Waiting for the
- * reply to each question also paces the commands to the device.
+ * <p>The X4 doesn't reply to an assignment, so the only way to know a
+ * setting was taken is to read it back; {@link #differences} does the
+ * comparison, and {@link X4Connection#configure} drives the
+ * write-then-read loop.
+ *
+ * <p>Only the settings that differ are sent. Each assignment costs the
+ * plugin's settle time (about 1.5 s: the X4 loses an assignment that is
+ * followed too closely by another command), so sending all twelve every
+ * time would take most of a minute.
  *
  * <p>Lexicon commands used (the X4 command each sends in brackets):
  * <pre>
@@ -28,143 +31,70 @@ import java.util.List;
  */
 final class X4SettingsWriter {
 
-    /** How long to give the X4 to act on a command before asking about it. */
-    private static final int COMMAND_GAP_MS = 150;
+    /* Setting names, as differences() reports them and the screens show them. */
+    private static final String BOARD_DATA_FORMAT = "Board data format";
+    private static final String SERIAL_NUMBER     = "X4 Serial Number";
+    private static final String PRESSURE_BIAS     = "Pressure Bias";
+    private static final String J3_BAUD_RATE      = "J3 Baud Rate";
+    private static final String FREQUENCY         = "Data Publishing Freq.";
+    private static final String DATA              = "Data";
 
-    /** How many times a setting is sent before giving up on it. */
-    private static final int SENDS_PER_SETTING = 3;
-
-    /**
-     * After this many questions in a row get no reply, stop: the X4 has
-     * gone, and each further question would cost the plugin's full
-     * timeout.
-     */
-    private static final int MAX_SILENCES_IN_A_ROW = 3;
-
-    private final PluginTest plugin;
-    private int silencesInARow;
-
-    private X4SettingsWriter(PluginTest plugin) {
-        this.plugin = plugin;
-    }
+    private X4SettingsWriter() { }
 
     /**
-     * Brings the device to {@code wanted}, one setting at a time. A port
-     * that {@code wanted} has no entry for is not written. Never throws;
-     * use {@link #differences} on a fresh read to see what was taken.
+     * Sends the named settings from {@code wanted}. Each command returns
+     * once the X4 has had time to act on it. Never throws.
+     *
+     * @param names which settings to send, as {@link #differences} names
+     *              them
      */
-    static void write(PluginTest plugin, X4Settings wanted) {
-        new X4SettingsWriter(plugin).write(wanted);
-    }
-
-    private void write(X4Settings wanted) {
+    static void write(PluginTest plugin, X4Settings wanted, List<String> names) {
         // The data format first: the X4 goes quiet for a moment after each
-        // of these, and nothing else should be waiting on it then.
-        set("Board data format", "resetBoardData",
-                () -> same(query("boardDataFormat"), wanted.boardDataFormat()));
-
+        // of these.
+        if (names.contains(BOARD_DATA_FORMAT)) {
+            command(plugin, "resetBoardData");
+        }
         for (int port = X4Settings.FIRST_PORT; port <= X4Settings.LAST_PORT; port++) {
             X4Settings.Port setting = wanted.port(port);
-            if (setting == null) {
+            if (setting == null || !names.contains("J" + port)) {
                 continue;
             }
-            String command;
             switch (setting.sensorId()) {
                 case X4Settings.SENSOR_NONE ->
-                        command = "configurePortToEmpty=" + port;
+                        command(plugin, "configurePortToEmpty=" + port);
                 case X4Settings.SENSOR_TEMPERATURE ->
-                        command = "configurePortToAirThermistor=" + port
-                                + "," + setting.values();
+                        command(plugin, "configurePortToAirThermistor=" + port
+                                + "," + setting.values());
                 case X4Settings.SENSOR_HUMIDITY ->
-                        command = "configurePortToHYT271=" + port
-                                + "," + setting.values();
+                        command(plugin, "configurePortToHYT271=" + port
+                                + "," + setting.values());
                 case X4Settings.SENSOR_SERIAL_FORWARD ->
-                        command = "configurePortToSerialForward=" + port
-                                + "," + setting.values();
-                default -> {
-                    Console.log("J" + port + " not written: no command for sensor "
-                            + setting.sensorId());
-                    continue;
-                }
+                        command(plugin, "configurePortToSerialForward=" + port
+                                + "," + setting.values());
+                default -> Console.log("J" + port + " not written: no command for sensor "
+                        + setting.sensorId());
             }
-            final int p = port;
-            set("J" + port, command, () -> {
-                X4Settings.Port now = X4SettingsReader.readPort(plugin, p);
-                return (now == null) ? null : samePort(setting, now);
-            });
         }
-
-        set("X4 Serial Number", "serialNumber=" + wanted.serialNumber(),
-                () -> same(query("serialNumber"), wanted.serialNumber()));
-        set("Pressure Bias", "pressureBias=" + wanted.pressureBias(),
-                () -> sameNumberOrNull(query("pressureBias"), wanted.pressureBias()));
-        set("J3 Baud Rate", "j3BaudRate=" + wanted.j3BaudRate(),
-                () -> same(query("j3BaudRate"), wanted.j3BaudRate()));
-        set("Data Publishing Freq.",
-                "dataPublishingFrequency=" + wanted.dataPublishingFrequency(),
-                () -> sameNumberOrNull(query("dataPublishingFrequency"),
-                        wanted.dataPublishingFrequency()));
-
+        if (names.contains(SERIAL_NUMBER)) {
+            command(plugin, "serialNumber=" + wanted.serialNumber());
+        }
+        if (names.contains(PRESSURE_BIAS)) {
+            command(plugin, "pressureBias=" + wanted.pressureBias());
+        }
+        if (names.contains(J3_BAUD_RATE)) {
+            command(plugin, "j3BaudRate=" + wanted.j3BaudRate());
+        }
+        if (names.contains(FREQUENCY)) {
+            command(plugin, "dataPublishingFrequency=" + wanted.dataPublishingFrequency());
+        }
         // Last, so data starts (or stops) in the new format.
-        String tdp = wanted.dataPublishing() ? "1" : "0";
-        set("Data", "toggleDataPublishing=" + tdp,
-                () -> same(query("toggleDataPublishing"), tdp));
-    }
-
-    /** Answers "does the device hold this setting as wanted?", or null for no reply. */
-    private interface Check {
-        Boolean holds();
-    }
-
-    /**
-     * Makes one setting hold: sends {@code command} unless the device
-     * already has it, and again if the device doesn't have it afterwards.
-     */
-    private void set(String name, String command, Check check) {
-        for (int sends = 0; ; sends++) {
-            if (silencesInARow >= MAX_SILENCES_IN_A_ROW) {
-                return;
-            }
-            Boolean holds = check.holds();
-            if (holds == null) {
-                if (++silencesInARow == MAX_SILENCES_IN_A_ROW) {
-                    Console.log("X4 stopped answering; not writing the remaining settings");
-                }
-            } else {
-                silencesInARow = 0;
-                if (holds) {
-                    if (sends > 1) {
-                        Console.log(name + " taken on send " + sends);
-                    }
-                    return;
-                }
-            }
-            if (sends == SENDS_PER_SETTING) {
-                Console.log(name + " not taken after " + sends + " sends");
-                return;
-            }
-            plugin.messageType_c(bytes(command));
-            try {
-                Thread.sleep(COMMAND_GAP_MS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
+        if (names.contains(DATA)) {
+            command(plugin, "toggleDataPublishing=" + (wanted.dataPublishing() ? "1" : "0"));
         }
     }
 
-    private String query(String message) {
-        byte[] reply = plugin.messageType_q(bytes(message));
-        return (reply == null) ? null
-                : new String(reply, StandardCharsets.US_ASCII).trim();
-    }
-
-    private static Boolean same(String got, String wanted) {
-        return (got == null) ? null : got.equals(wanted);
-    }
-
-    private static Boolean sameNumberOrNull(String got, String wanted) {
-        return (got == null) ? null : sameNumber(wanted, got);
+    private static void command(PluginTest plugin, String command) {
+        plugin.messageType_c(bytes(command));
     }
 
     private static boolean samePort(X4Settings.Port asked, X4Settings.Port got) {
@@ -183,24 +113,24 @@ final class X4SettingsWriter {
 
         if (now.serialNumber() == null
                 || !now.serialNumber().equals(wanted.serialNumber())) {
-            different.add("X4 Serial Number");
+            different.add(SERIAL_NUMBER);
         }
         if (!sameNumber(wanted.dataPublishingFrequency(), now.dataPublishingFrequency())) {
-            different.add("Data Publishing Freq.");
+            different.add(FREQUENCY);
         }
         if (!sameNumber(wanted.pressureBias(), now.pressureBias())) {
-            different.add("Pressure Bias");
+            different.add(PRESSURE_BIAS);
         }
         if (now.j3BaudRate() == null || !now.j3BaudRate().equals(wanted.j3BaudRate())) {
-            different.add("J3 Baud Rate");
+            different.add(J3_BAUD_RATE);
         }
         if (now.dataPublishing() == null
                 || !now.dataPublishing().equals(wanted.dataPublishing())) {
-            different.add("Data");
+            different.add(DATA);
         }
         if (now.boardDataFormat() == null
                 || !now.boardDataFormat().equals(wanted.boardDataFormat())) {
-            different.add("Board data format");
+            different.add(BOARD_DATA_FORMAT);
         }
 
         for (int port = X4Settings.FIRST_PORT; port <= X4Settings.LAST_PORT; port++) {

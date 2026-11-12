@@ -49,15 +49,6 @@ final class X4SettingsReader {
         return new X4SettingsReader(plugin).read();
     }
 
-    /**
-     * Reads what one port is configured for.
-     *
-     * @return the port's setting, or {@code null} if a query got no reply
-     */
-    static X4Settings.Port readPort(PluginTest plugin, int port) {
-        return new X4SettingsReader(plugin).readPort(port);
-    }
-
     private X4Settings read() {
         String srn = query("serialNumber", "X4 Serial Number");
         String dpf = query("dataPublishingFrequency", "Data Publishing Freq.");
