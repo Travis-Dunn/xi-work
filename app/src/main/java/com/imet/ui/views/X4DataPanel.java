@@ -93,8 +93,18 @@ public class X4DataPanel extends JPanel {
     private static final String TEMPERATURE_NAME = "10085B iMet-X4 Temperature Sensor";
     private static final String HUMIDITY_NAME    = "10086B iMet-X4 Humidity Sensor";
 
-    /** Width of a value field; wide enough for 00.00000001 latitude. */
+    /** Least width of a value field. */
     private static final int FIELD_WIDTH = 84;
+
+    /**
+     * The widest value the device sends in the board columns that can
+     * outgrow {@link #FIELD_WIDTH}, keyed by column index; their fields
+     * are sized to show it whole (#31).
+     */
+    private static final Map<Integer, String> WIDEST_BOARD_VALUES = Map.of(
+            1,  "9999/9999/9999",   // the date with no GPS fix
+            14, "-00.0000000",      // latitude
+            15, "-000.0000000");    // longitude
 
     /** Width of a port row's sensor-name column, so value columns line up. */
     private static final int SENSOR_NAME_WIDTH = 230;
@@ -347,14 +357,26 @@ public class X4DataPanel extends JPanel {
         // out keeps its field, empty (#30).
         for (int i = 0; i < boardFields.length; i++) {
             String value = line.board()[i];
-            boardFields[i].setText(value != null ? value : "");
+            setValue(boardFields[i], value != null ? value : "");
         }
         for (Map.Entry<Integer, JTextField[]> port : portFields.entrySet()) {
             String[] values = line.ports().get(port.getKey());
             JTextField[] fields = port.getValue();
             for (int i = 0; i < fields.length; i++) {
-                fields[i].setText(values != null && i < values.length ? values[i] : "");
+                setValue(fields[i], values != null && i < values.length ? values[i] : "");
             }
+        }
+    }
+
+    /**
+     * Shows a value from its first character. Left alone, a text field
+     * scrolls to the end of a value that is too wide for it (e.g. a date
+     * of 9999/9999/9999), hiding the start.
+     */
+    private static void setValue(JTextField field, String value) {
+        if (!value.equals(field.getText())) {
+            field.setText(value);
+            field.setCaretPosition(0);
         }
     }
 
@@ -521,6 +543,7 @@ public class X4DataPanel extends JPanel {
 
         for (int i = 0; i < BOARD_LABELS.length; i++) {
             boardFields[i] = createValueField();
+            widenFor(boardFields[i], WIDEST_BOARD_VALUES.get(i));
             gbc.gridx = 1 + i % BOARD_FIELDS_PER_ROW;
             gbc.gridy = i / BOARD_FIELDS_PER_ROW;
             panel.add(createValueColumn(BOARD_LABELS[i][0], BOARD_LABELS[i][1],
@@ -686,6 +709,22 @@ public class X4DataPanel extends JPanel {
         field.setPreferredSize(size);
         field.setMaximumSize(size);
         return field;
+    }
+
+    /** Widens a value field, if need be, so that {@code widest} fits. */
+    private static void widenFor(JTextField field, String widest) {
+        if (widest == null) {
+            return;
+        }
+        Insets insets = field.getInsets();
+        // A little slack: text fields keep a pixel or two for the caret.
+        int needed = field.getFontMetrics(field.getFont()).stringWidth(widest)
+                + insets.left + insets.right + 4;
+        if (needed > FIELD_WIDTH) {
+            Dimension size = new Dimension(needed, field.getPreferredSize().height);
+            field.setPreferredSize(size);
+            field.setMaximumSize(size);
+        }
     }
 
     /** Name, then unit (or a blank line), then the value field, centred. */
