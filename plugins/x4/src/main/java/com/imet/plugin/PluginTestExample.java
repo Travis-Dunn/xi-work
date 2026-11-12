@@ -57,6 +57,9 @@ public class PluginTestExample implements PluginTest {
     @Override
     public synchronized byte[] messageType_q(byte[] arg) {
         String name = new String(arg, StandardCharsets.US_ASCII);
+        if (name.equals("acknowledgeDevice")) {
+            return ascii(acknowledge() ? "1" : "0");
+        }
         String key = querySettingFor(name);
         if (key == null) {
             log("query [" + name + "] is not supported");
@@ -74,13 +77,39 @@ public class PluginTestExample implements PluginTest {
 
     /* Command. arg is "<lexicon message name>=<value>", e.g.
        "serialNumber=1234". Sends the assignment (e.g. /SRN=1234). The X4
-       doesn't reply to assignments, so there is nothing to wait for. */
+       doesn't reply to assignments, so there is nothing to wait for.
+
+       The configurePortTo... commands take the port number 4-9 first,
+       then the sensor's settings as the matching parameterized query
+       returns them:
+         configurePortToEmpty=8
+         configurePortToAirThermistor=8,<serial>,<A0>,<A1>,<A2>,<A3>
+         configurePortToHYT271=4,0x28
+         configurePortToSerialForward=6,<baud>,<columns>
+       Each is sent with a bitmask of 0 (every column), as is
+       resetBoardData (/CBD=0,0), which takes no value. */
     @Override
     public synchronized void messageType_c(byte[] arg) {
         String argstr = new String(arg, StandardCharsets.US_ASCII);
         int eq = argstr.indexOf('=');
         String name = (eq >= 0) ? argstr.substring(0, eq) : argstr;
         String value = (eq >= 0) ? argstr.substring(eq + 1) : "";
+
+        if (value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0) {
+            log("command [" + name + "] can't contain a line ending");
+            return;
+        }
+        if (name.equals("resetBoardData")) {
+            send(name, "/CBD=0,0");
+            return;
+        }
+        if (name.startsWith("configurePortTo")) {
+            String assignment = portAssignment(name, value);
+            if (assignment != null) {
+                send(name, assignment);
+            }
+            return;
+        }
 
         String key = settingFor(name);
         if (key == null) {
@@ -95,16 +124,98 @@ public class PluginTestExample implements PluginTest {
                 return;
             }
         }
+        send(name, "/" + key + "=" + value);
+    }
+
+    /* Sends one command line for the lexicon command `name`. */
+    private void send(String name, String line) {
         if (!isConnected()) {
             log("command [" + name + "] needs a J1 connection");
             return;
         }
-
         try {
-            transport.write(("/" + key + "=" + value + "\r\n")
-                    .getBytes(StandardCharsets.US_ASCII));
+            transport.write((line + "\r\n").getBytes(StandardCharsets.US_ASCII));
         } catch (IOException e) {
             log("command [" + name + "] failed: " + e.getMessage());
+        }
+    }
+
+    /* Builds the /CJ#= line for a configurePortTo... command (manual
+       3.3.4, 4.3), or returns null, having logged why, if the value isn't
+       a port number followed by the right number of settings. */
+    private static String portAssignment(String name, String value) {
+        int sensorId;
+        int valueCount;
+        boolean bitmask = true;
+        switch (name) {
+            case "configurePortToEmpty":
+                sensorId = SENSOR_NONE;
+                valueCount = 0;
+                bitmask = false;
+                break;
+            case "configurePortToAirThermistor":
+                sensorId = SENSOR_TEMPERATURE;
+                valueCount = 5;
+                break;
+            case "configurePortToHYT271":
+                sensorId = SENSOR_HUMIDITY;
+                valueCount = 1;
+                break;
+            case "configurePortToSerialForward":
+                sensorId = SENSOR_SERIAL_FORWARD;
+                valueCount = 2;
+                bitmask = false; // serial forward has no bitmask (4.3.4)
+                break;
+            default:
+                log("command [" + name + "] is not supported");
+                return null;
+        }
+
+        String[] parts = value.split(",", -1);
+        int port;
+        try {
+            port = Integer.parseInt(parts[0].trim());
+        } catch (NumberFormatException e) {
+            port = -1;
+        }
+        if (port < 4 || port > 9) {
+            log("command [" + name + "=" + value + "] needs a port number 4-9");
+            return null;
+        }
+        if (parts.length != 1 + valueCount) {
+            log("command [" + name + "=" + value + "] needs the port and "
+                    + valueCount + " more value(s)");
+            return null;
+        }
+
+        StringBuilder line = new StringBuilder("/CJ" + port + "=" + sensorId);
+        for (int i = 1; i < parts.length; i++) {
+            String part = parts[i].trim();
+            if (part.isEmpty()) {
+                log("command [" + name + "=" + value + "] has an empty value");
+                return null;
+            }
+            line.append(',').append(part);
+        }
+        if (bitmask) {
+            line.append(",0");
+        }
+        return line.toString();
+    }
+
+    /* Sends /ACK? and says whether the X4 answered (manual 3.3.10). */
+    private boolean acknowledge() {
+        if (!isConnected()) {
+            log("[acknowledgeDevice] needs a J1 connection");
+            return false;
+        }
+        try {
+            transport.flush();
+            transport.write("/ACK?\r\n".getBytes(StandardCharsets.US_ASCII));
+            return readLineWithPrefix("ACK", ACK_TIMEOUT_MS) != null;
+        } catch (IOException e) {
+            log("[acknowledgeDevice] failed: " + e.getMessage());
+            return false;
         }
     }
 
