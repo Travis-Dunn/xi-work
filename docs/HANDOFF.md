@@ -126,12 +126,12 @@ skipping streamed data lines.
 
 | # | Status |
 |---|---|
-| 27 No data until settings read | Started. Status text only; nothing marks settings as read yet (needs #14). The J1 terminal shows data before settings: is that OK under #27? |
-| 28 Board fields | Layout done (XS labels; ground speed m/s per my answer). Not filled. |
-| 29 Port fields | Layout done; `setPortSensor(port, id)` shows a row's fields. Not filled. |
+| 27 No data until settings read | Done: fields fill only once the settings have been read at connect. The J1 terminal shows raw data regardless. |
+| 28 Board fields | Done (XS labels; ground speed m/s per my answer). |
+| 29 Port fields | Done for the temperature and humidity sensors. |
 | 30 Fields stay when a column is off | Done by design. |
-| 31 Show exactly as sent | Parser not started. |
-| 32 Ignore header | Parser not started; needs a real header sample. |
+| 31 Show exactly as sent | Done (`X4DataFormat`, with unit tests from a real capture). |
+| 32 Ignore header | Done as a precaution: a real X4 sends no header on J1 (captured 2026-11-12). |
 | 33 J1 terminal | Done (ASCII, 2000-line history, follows only at the bottom). |
 | 34 J3 terminal | Layout only; J3 has no reader. |
 | 35 Erase Card | Button only. |
@@ -179,10 +179,9 @@ I checked the layout against XS on Windows; it looks good.
 4. **Port bitmask.** The `configurePortTo…` returns omit each sensor's
    trailing bitmask, which the Data screen needs if a port masks columns.
    Lexicon decision pending.
-5. **Data parser (#28–#32).** Column mapping is in `docs/x4-data-format.md`.
-   Open questions there: date label vs `mm/dd/yy`, header format (capture one
-   on hardware), serial-forward columns, reserved IDs, and a non-comma
-   delimiter. Note the device doesn't zero-pad (`1:12:36`, `11/5/26`).
+5. **Data parser (#28–#32).** Done 2026-11-12; rules and limits are in
+   `docs/x4-data-format.md`. Still open there: the date label, serial
+   forward, reserved IDs, and port bitmasks (assumed 0, see item 4).
 6. **Connect error handling.** The J1 Connect `SwingWorker` catches only
    `Exception`. An `Error` (e.g. `AbstractMethodError` from a stale plugin
    jar, or jssc's `UnsatisfiedLinkError`) leaves the UI saying "connected".
@@ -205,6 +204,8 @@ I checked the layout against XS on Windows; it looks good.
     - `tools/fake_x4.py`: a fake X4 on a pseudo-terminal (`--help` lists
       its options, e.g. `--silent`, `--no-srn`, `--delay`, `--set`). Its
       header text and `/VER?` reply are guesses.
+    - `tools/CaptureHeader.java`: records what a real X4 sends on J1 when
+      its data format changes.
     - `tools/harness/run.sh`: runs the real app against the fake under
       Xvfb, drives the panels through reflection, and prints what they show.
 
@@ -216,9 +217,8 @@ I checked the layout against XS on Windows; it looks good.
 
 ## Suggested next steps
 
-1. The port bitmask decision (open item 4), then the parser (#27–#32),
-   after capturing a real header.
-2. Sensor fields and Configure X4 (#16–#21, #26).
-3. J3 reader and terminal (#34).
-4. Logging and Mark (#37, #38).
-5. Card buttons (#35, #36).
+1. Sensor fields and Configure X4 (#16–#21, #26). After Configure the
+   settings must be read again, or the Data screen's format goes stale.
+2. J3 reader and terminal (#34).
+3. Logging and Mark (#37, #38).
+4. Card buttons (#35, #36).

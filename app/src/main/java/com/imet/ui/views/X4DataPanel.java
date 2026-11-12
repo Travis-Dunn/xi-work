@@ -1,6 +1,7 @@
 package com.imet.ui.views;
 
 import com.imet.device.X4Connection;
+import com.imet.device.X4DataFormat;
 import com.imet.device.X4Settings;
 
 import javax.swing.*;
@@ -23,11 +24,10 @@ import java.util.function.Consumer;
  *   <li>Read-only J1 and J3 terminals along the bottom (#33, #34)</li>
  * </ul>
  *
- * <p>So far the J1 terminal is live and the port rows follow the X4's
- * settings (see {@link #setConnection}); the fields are not filled in
- * yet and the buttons have no actions. Which
- * data column feeds which field is described in
- * {@code docs/x4-data-format.md}.
+ * <p>The J1 terminal is live, and the board and port fields show the
+ * latest data line once the X4's settings have been read (see
+ * {@link #setConnection}). The buttons have no actions yet. Which data
+ * column feeds which field is described in {@code docs/x4-data-format.md}.
  */
 public class X4DataPanel extends JPanel {
 
@@ -38,6 +38,8 @@ public class X4DataPanel extends JPanel {
     private static final Color LABEL_TEXT   = new Color(0x666666);
     private static final Color UNIT_TEXT    = new Color(0x888888);
     private static final Color ERROR_RED    = new Color(255, 25, 25);
+    private static final Color WARNING_ORANGE = new Color(255, 150, 50);
+    private static final Color STATUS_GREY  = new Color(0x999999);
 
     /** Sensor IDs used with /CJ4–/CJ9 (X4 manual section 4.3). */
     public static final int SENSOR_NONE        = X4Settings.SENSOR_NONE;
@@ -144,7 +146,36 @@ public class X4DataPanel extends JPanel {
 
     /** Hands J1 bytes from the connection's reader thread to the EDT. */
     private final Consumer<byte[]> j1Receiver =
-            data -> SwingUtilities.invokeLater(() -> j1Terminal.append(data));
+            data -> SwingUtilities.invokeLater(() -> {
+                j1Terminal.append(data);
+                parseData(data);
+            });
+
+    // ── Data lines ───────────────────────────────────────────────────────────
+
+    /**
+     * Layout of the data lines, from the settings read at connect; null
+     * until then, so nothing is shown before the settings are known (#27).
+     */
+    private X4DataFormat format;
+
+    /** J1 bytes since the last line ending. */
+    private final StringBuilder lineBuffer = new StringBuilder();
+
+    /** Lines in a row that were not data in the expected format. */
+    private int unmatchedLines;
+
+    /**
+     * A line longer than this is not a data line; the rest of it is
+     * dropped rather than buffered.
+     */
+    private static final int MAX_LINE_LENGTH = 2048;
+
+    /**
+     * After this many lines in a row don't fit the format, say so. One or
+     * two are normal: replies to commands arrive between data lines.
+     */
+    private static final int UNMATCHED_LINES_BEFORE_ERROR = 3;
 
     // ── Layout ───────────────────────────────────────────────────────────────
 
@@ -225,27 +256,117 @@ public class X4DataPanel extends JPanel {
             conn.addReceiveListener(j1Receiver);
         }
 
+        lineBuffer.setLength(0);
+        unmatchedLines = 0;
+
         X4Settings settings = (conn != null) ? conn.getSettings() : null;
         if (settings == null) {
-            showStatus("Waiting for the X4's settings", false);
+            // Disconnected. The last values stay on screen, like the
+            // terminal's history, but nothing new is parsed.
+            format = null;
+            showStatus("Waiting for the X4's settings", STATUS_GREY);
             return;
         }
+
+        clearFields();
         for (int port = X4Settings.FIRST_PORT; port <= X4Settings.LAST_PORT; port++) {
             X4Settings.Port setting = settings.port(port);
             setPortSensor(port, setting != null ? setting.sensorId() : SENSOR_NONE);
         }
-        if (settings.isComplete()) {
-            showStatus("", false);
-        } else {
+
+        format = X4DataFormat.from(settings);
+        showFormatStatus();
+    }
+
+    /** Status for a format with no data trouble: its problem, warning, or nothing. */
+    private void showFormatStatus() {
+        if (format.problem() != null) {
             // #27: without every setting the data format isn't known.
-            showStatus("Could not read: "
-                    + String.join(", ", settings.missing()), true);
+            showStatus(format.problem(), ERROR_RED);
+        } else if (format.warning() != null) {
+            showStatus(format.warning(), WARNING_ORANGE);
+        } else {
+            showStatus("", STATUS_GREY);
         }
     }
 
-    private void showStatus(String text, boolean error) {
+    private void showStatus(String text, Color color) {
         statusLabel.setText(text);
-        statusLabel.setForeground(error ? ERROR_RED : new Color(0x999999));
+        statusLabel.setForeground(color);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    //  Data lines (#27–#32)
+    // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Takes bytes as they arrive on J1, and shows each complete data line
+     * in the board and port fields. Must be called on the EDT.
+     */
+    private void parseData(byte[] data) {
+        if (format == null || format.problem() != null) {
+            return;
+        }
+        for (byte b : data) {
+            if (b == '\n') {
+                String line = lineBuffer.toString();
+                lineBuffer.setLength(0);
+                // Lines end in CR LF; a blank line is not worth counting.
+                if (line.endsWith("\r")) {
+                    line = line.substring(0, line.length() - 1);
+                }
+                if (!line.isEmpty()) {
+                    showLine(line);
+                }
+            } else if (lineBuffer.length() < MAX_LINE_LENGTH) {
+                lineBuffer.append((char) (b & 0xFF));
+            }
+        }
+    }
+
+    private void showLine(String text) {
+        X4DataFormat.Line line = format.parse(text);
+        if (line == null) {
+            unmatchedLines++;
+            if (unmatchedLines == UNMATCHED_LINES_BEFORE_ERROR) {
+                showStatus("Data doesn't match the X4's settings ("
+                        + format.countColumns(text) + " values on a line, "
+                        + format.columnCount() + " expected). "
+                        + "Reconnect J1 to read the settings again.", ERROR_RED);
+                // The values on screen are no longer what the X4 is sending.
+                clearFields();
+            }
+            return;
+        }
+        if (unmatchedLines >= UNMATCHED_LINES_BEFORE_ERROR) {
+            showFormatStatus();
+        }
+        unmatchedLines = 0;
+
+        // Exactly what the device sent (#31). A column the device leaves
+        // out keeps its field, empty (#30).
+        for (int i = 0; i < boardFields.length; i++) {
+            String value = line.board()[i];
+            boardFields[i].setText(value != null ? value : "");
+        }
+        for (Map.Entry<Integer, JTextField[]> port : portFields.entrySet()) {
+            String[] values = line.ports().get(port.getKey());
+            JTextField[] fields = port.getValue();
+            for (int i = 0; i < fields.length; i++) {
+                fields[i].setText(values != null && i < values.length ? values[i] : "");
+            }
+        }
+    }
+
+    private void clearFields() {
+        for (JTextField field : boardFields) {
+            field.setText("");
+        }
+        for (JTextField[] fields : portFields.values()) {
+            for (JTextField field : fields) {
+                field.setText("");
+            }
+        }
     }
 
     private JPanel createHeadingRow() {

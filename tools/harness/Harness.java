@@ -6,7 +6,7 @@ import java.lang.reflect.*;
 import java.util.*;
 
 /* Drives the real app against a port named on the command line.
-   args: <port> <output dir> [tag] */
+   args: <port> <output dir> [tag] [command to send mid-run] */
 public class Harness {
     static Object get(Object o, String f) throws Exception {
         Field fld = o.getClass().getDeclaredField(f); fld.setAccessible(true); return fld.get(o);
@@ -35,6 +35,17 @@ public class Harness {
                 javax.imageio.ImageIO.write(img, "png", new File(path));
             } catch (Exception e) { throw new RuntimeException(e); }
         });
+    }
+    static String dataFields(Object dp) throws Exception {
+        StringBuilder sb = new StringBuilder("board=[");
+        for (JTextField f : (JTextField[]) get(dp, "boardFields")) sb.append(f.getText()).append('|');
+        sb.append("]");
+        for (Map.Entry<?, ?> e : new TreeMap<>((Map<?, ?>) get(dp, "portFields")).entrySet()) {
+            sb.append(" J").append(e.getKey()).append("=[");
+            for (JTextField f : (JTextField[]) e.getValue()) sb.append(f.getText()).append('|');
+            sb.append("]");
+        }
+        return sb.toString();
     }
     public static void main(String[] a) throws Exception {
         String port = a[0], out = a[1], tag = a.length > 2 ? a[2] : "run";
@@ -91,7 +102,18 @@ public class Harness {
             Thread.sleep(2500);
             com.imet.ui.views.X4DataPanel dp = find(tab, com.imet.ui.views.X4DataPanel.class);
             System.out.println("HARNESS data status=[" + ((JLabel) get(dp, "statusLabel")).getText() + "] portRows=" + ((Map<?, ?>) get(dp, "portFields")).keySet());
+            System.out.println("HARNESS data " + dataFields(dp));
             shot(frame.getContentPane(), out + "/" + tag + "-data.png");
+            if (a.length > 3) {
+                // Send the device a command behind the app's back, as another
+                // program would, then see what the Data screen makes of it.
+                try (java.io.FileOutputStream f = new java.io.FileOutputStream(port)) {
+                    f.write((a[3] + "\r\n").getBytes());
+                }
+                Thread.sleep(4500);
+                System.out.println("HARNESS after [" + a[3] + "] data status=[" + ((JLabel) get(dp, "statusLabel")).getText() + "]");
+                System.out.println("HARNESS after [" + a[3] + "] data " + dataFields(dp));
+            }
             SwingUtilities.invokeAndWait(() -> tab.showView("Configuration"));
             Thread.sleep(1500);
             System.out.println("HARNESS after returning to Configuration srn=" + ((JTextField) get(cp, "srnField")).getText());
