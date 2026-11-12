@@ -1,6 +1,6 @@
 {
 	"lexiconSpecificationVersion":"0.2.0",
-	"lexiconVersion":"0.1.0",
+	"lexiconVersion":"0.2.0",
 	"deviceName":"iMet-X4 J1",
 	"deviceID":2,
 	"pluginFileName":"X4Plugin.jar",
@@ -72,7 +72,7 @@
 				"argument_p":"float",
 				"argument_p_len":1,
 				"return_p":"float",
-				"return_p":1
+				"return_p_len":1
 			},
 			"messagePanelClass":"...",
 			"implementationNote":"The command is to set the port value. The parameterized query is to check if a port is set to this sensor. Command and parameterized query argument is {port number 4-9}, parameterized query return is true or false expressed as an integer."
@@ -91,7 +91,7 @@
 				"argument_p":"float",
 				"argument_p_len":1,
 				"return_p":"float",
-				"return_p":5
+				"return_p_len":5
 			},
 			"messagePanelClass":"...",
 			"implementationNote":"The command is to set the port value and sensor information. The parameterized query is to check if a port is set to this sensor. The command argument is {port, serial number, AT1, AT2, AT3, AT4}. The parameterized query argument is {port}. The parameterized query return is {serial number, AT1, AT2, AT3, AT4}."
@@ -110,7 +110,7 @@
 				"argument_p":"int",
 				"argument_p_len":1,
 				"return_p":"int",
-				"return_p":1
+				"return_p_len":1
 			},
 			"messagePanelClass":"...",
 			"implementationNote":"The command is to set the port value and sensor information. The parameterized query is to check if a port is set to this sensor. The command argument is {port, I2C address}. The parameterized query argument is {port}. The parameterized query return is {I2C address}."
@@ -129,7 +129,7 @@
 				"argument_p":"int",
 				"argument_p_len":1,
 				"return_p":"int",
-				"return_p":2
+				"return_p_len":2
 			},
 			"messagePanelClass":"...",
 			"implementationNote":"The command is to set the port value and sensor information. The parameterized query is to check if a port is set to this sensor. The command argument is {port, baud rate, header columns}. The parameterized query argument is {port}. The parameterized query return is {baud rate, header columns}."
@@ -148,6 +148,38 @@
 			},
 			"messagePanelClass":"...",
 			"implementationNote":"Just send /CBD=0,0\r\n with this. It's the only configuration supported by the GUI."
+		},
+		{
+			"messageName":"boardDataFormat",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":false,
+				"messageType_p":false
+			},
+			"messageDescription":"Query the format of the board data in the data stream",
+			"messageTokens": {
+				"return_q":"ascii",
+				"return_q_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/CBD? poll. Returns the setting as the device reports it, e.g. 0,30720: the data format (always 0), the delimiter character, then the bitmask of board columns left out of the data stream (manual 3.3.5, 4.2). Use resetBoardData to change it."
+		},
+		{
+			"messageName":"j3BaudRate",
+			"messageType":{
+				"messageType_q":true,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Set or query the UART baud rate on J3",
+			"messageTokens": {
+				"argument_c":"int",
+				"argument_c_len":1,
+				"return_q":"int",
+				"return_q_len":1
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/CJ3 command. Acceptable values are 9600, 19200, 38400, 57600 and 115200. The J3 port restarts at the new rate immediately."
 		},
 		{
 			"messageName":"dataPublishingFrequency",
@@ -324,8 +356,8 @@
 			"messageTokens": {
 				"argument_c":"ascii",
 				"argument_c_len":1,
-				"return_p":"ascii",
-				"return_p_len":1
+				"return_q":"ascii",
+				"return_q_len":1
 			},
 			"messagePanelClass":"...",
 			"implementationNote":"/SRN"

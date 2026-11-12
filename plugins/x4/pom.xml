@@ -15,12 +15,6 @@
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-            <groupId>io.github.java-native</groupId>
-            <artifactId>jssc</artifactId>
-            <version>${jssc.version}</version>
-            <scope>provided</scope>
-        </dependency>
     </dependencies>
     <build>
         <finalName>X4Plugin</finalName>

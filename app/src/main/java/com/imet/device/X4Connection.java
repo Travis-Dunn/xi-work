@@ -1,11 +1,15 @@
 package com.imet.device;
 
+import com.imet.Console;
 import com.imet.plugin.PluginTest;
 import jssc.SerialPort;
 import jssc.SerialPortException;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 /**
  * Manages the serial connection to an iMet-X4 Hub over J1.
@@ -15,9 +19,13 @@ import java.util.Objects;
  * end is delegated to the X4 plugin, which is handed the open port as a
  * {@link com.imet.plugin.PluginTransport}.
  * <p>
- * Once connected, the port remains open for subsequent command
- * exchanges (configuration queries, writes, etc.).  Call
- * {@link #disconnect()} to release the port.
+ * Once connected, the port remains open, and commands to the device go
+ * through the plugin ({@link #getPlugin}).  Call {@link #disconnect()} to
+ * release the port.
+ * <p>
+ * Once the port is open, a reader thread is the only thing that reads it.
+ * It passes every received chunk to the plugin's transport, then to the
+ * listeners added with {@link #addReceiveListener}.
  */
 public class X4Connection implements AutoCloseable {
 
@@ -30,13 +38,22 @@ public class X4Connection implements AutoCloseable {
     /** Time to let the FTDI chip settle after opening the port. */
     private static final int POST_OPEN_DELAY_MS = 50;
 
-    /** Default timeout for a command response. */
-    private static final int DEFAULT_TIMEOUT_MS = 500;
-
-    /** Polling interval while waiting for a response. */
+    /** Polling interval of the reader thread while no bytes are waiting. */
     private static final int POLL_INTERVAL_MS = 20;
 
+    /** How long {@link #disconnect} waits for the reader thread to stop. */
+    private static final int READER_STOP_TIMEOUT_MS = 500;
+
     private SerialPort serialPort;
+
+    /** Reads J1 while connected; null when disconnected. */
+    private Thread readerThread;
+
+    /** The plugin's view of the port, fed by the reader; null when closed. */
+    private SerialPortTransport transport;
+
+    /** Called on the reader thread with each chunk of bytes received. */
+    private final List<Consumer<byte[]>> receiveListeners = new CopyOnWriteArrayList<>();
 
     /** Device plugin that verifies the device once the port is open. */
     private final PluginTest plugin;
@@ -63,6 +80,7 @@ public class X4Connection implements AutoCloseable {
                     + ". Disconnect first.");
         }
 
+        Console.log("J1 opening " + portName + " at " + BAUD_RATE + " 8-N-1");
         SerialPort port = new SerialPort(portName);
         try {
             port.openPort();
@@ -70,8 +88,10 @@ public class X4Connection implements AutoCloseable {
             port.setFlowControlMode(FLOW_CONTROL);
 
             Thread.sleep(POST_OPEN_DELAY_MS);
+            Console.log("J1 port open");
 
         } catch (SerialPortException e) {
+            Console.log("J1 open failed: " + e.getExceptionType());
             closeQuietly(port);
             throw new IOException("Failed to open " + portName + ": "
                     + e.getExceptionType(), e);
@@ -82,18 +102,28 @@ public class X4Connection implements AutoCloseable {
             throw new IOException("Connection interrupted.", e);
         }
 
-        // The port is open — let the plugin check that an X4 is on it.
-        // Any failure from the plugin must still release the port.
+        // The port is open. Start the reader before anything else reads:
+        // from here on it is the only reader, and the plugin's transport
+        // gets its bytes from it.
+        transport = new SerialPortTransport(port, "J1");
+        startReader(port, transport);
+
+        // Let the plugin check that an X4 is on it. Any failure from the
+        // plugin must still release the port.
         try {
-            plugin.setTransport(new SerialPortTransport(port));
+            Console.log("J1 plugin startComm (ACK handshake)");
+            plugin.setTransport(transport);
             plugin.startComm();
+            Console.log("J1 plugin verified the device");
         } catch (IOException | RuntimeException e) {
+            Console.log("J1 plugin rejected the device: " + e);
             plugin.stopComm();
-            closeQuietly(port);
+            release(port);
             throw new IOException(portName + ": " + e.getMessage(), e);
         } catch (AbstractMethodError e) {
             // plugins/X4Plugin.jar was built against the old PluginTest.
-            closeQuietly(port);
+            Console.log("J1 plugin is out of date: " + e);
+            release(port);
             throw new IOException("The X4 plugin is out of date. Rebuild "
                     + "X4Plugin.jar and copy it into the plugins folder.", e);
         }
@@ -102,46 +132,34 @@ public class X4Connection implements AutoCloseable {
     }
 
     /**
-     * Sends a command string and returns the response.
-     *
-     * @param command   the full command including leading {@code /} and
-     *                  trailing {@code \r\n}
-     * @param timeoutMs maximum time to wait for a response
-     * @return the trimmed response string, or {@code null} if no
-     *         response was received within the timeout
-     * @throws IOException if the port is not open or a serial error occurs
+     * Registers a listener for everything received on J1, exactly as it
+     * arrives. It is called on the reader thread, so a Swing listener must
+     * hand the bytes to the EDT itself.
      */
-    public String sendCommand(String command, int timeoutMs) throws IOException {
-        if (serialPort == null || !serialPort.isOpened()) {
-            throw new IOException("Not connected.");
-        }
-        try {
-            // Drain before sending so we only read the response to this command.
-            if (serialPort.getInputBufferBytesCount() > 0) {
-                serialPort.readBytes(serialPort.getInputBufferBytesCount());
-            }
-
-            serialPort.writeBytes(command.getBytes());
-            return readResponse(serialPort, timeoutMs);
-
-        } catch (SerialPortException e) {
-            throw new IOException("Serial error: " + e.getExceptionType(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Command interrupted.", e);
-        }
+    public void addReceiveListener(Consumer<byte[]> listener) {
+        receiveListeners.add(Objects.requireNonNull(listener, "listener"));
     }
 
-    /** Convenience overload using the default timeout. */
-    public String sendCommand(String command) throws IOException {
-        return sendCommand(command, DEFAULT_TIMEOUT_MS);
+    public void removeReceiveListener(Consumer<byte[]> listener) {
+        receiveListeners.remove(listener);
+    }
+
+    /**
+     * Returns the plugin that talks to the device on this connection. Its
+     * message calls work only while connected.
+     */
+    public PluginTest getPlugin() {
+        return plugin;
     }
 
     /** Closes the serial port if open. Safe to call multiple times. */
     public void disconnect() {
         if (serialPort != null) {
+            Console.log("J1 closing " + serialPort.getPortName());
+            // The plugin goes first, while the reader still runs, in case
+            // it wants a last exchange with the device.
             plugin.stopComm();
-            closeQuietly(serialPort);
+            release(serialPort);
             serialPort = null;
         }
     }
@@ -165,31 +183,73 @@ public class X4Connection implements AutoCloseable {
     //  Internal helpers
     // ────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Reads bytes from the port until a newline is seen or the timeout
-     * expires.  Uses short polling intervals to stay responsive.
-     */
-    private static String readResponse(SerialPort port, int timeoutMs)
-            throws SerialPortException, InterruptedException {
+    private void startReader(SerialPort port, SerialPortTransport transport) {
+        readerThread = new Thread(() -> readLoop(port, transport), "imet-j1-reader");
+        readerThread.setDaemon(true);
+        readerThread.start();
+        Console.log("J1 reader started");
+    }
 
-        StringBuilder sb = new StringBuilder();
-        long deadline = System.currentTimeMillis() + timeoutMs;
-
-        while (System.currentTimeMillis() < deadline) {
-            int available = port.getInputBufferBytesCount();
-            if (available > 0) {
-                byte[] chunk = port.readBytes(available);
-                sb.append(new String(chunk));
-
-                if (sb.indexOf("\n") >= 0) {
-                    break;
-                }
-            } else {
-                Thread.sleep(POLL_INTERVAL_MS);
-            }
+    /** Stops the reader thread; it must not be reading when the port closes. */
+    private void stopReader() {
+        Thread reader = readerThread;
+        readerThread = null;
+        if (reader == null) {
+            return;
         }
+        reader.interrupt();
+        try {
+            reader.join(READER_STOP_TIMEOUT_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (reader.isAlive()) {
+            Console.log("J1 reader did not stop within "
+                    + READER_STOP_TIMEOUT_MS + " ms");
+        }
+    }
 
-        return sb.length() > 0 ? sb.toString().trim() : null;
+    /** Stops the reader, ends the plugin's transport, and closes the port. */
+    private void release(SerialPort port) {
+        stopReader();
+        if (transport != null) {
+            transport.close();
+            transport = null;
+        }
+        closeQuietly(port);
+    }
+
+    /**
+     * Reader thread body: polls the port and passes each chunk to the
+     * plugin's transport and the receive listeners. Runs until interrupted
+     * by {@link #stopReader} or a serial error.
+     */
+    private void readLoop(SerialPort port, SerialPortTransport transport) {
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                int available = port.getInputBufferBytesCount();
+                if (available <= 0) {
+                    Thread.sleep(POLL_INTERVAL_MS);
+                    continue;
+                }
+                byte[] chunk = port.readBytes(available);
+
+                transport.receive(chunk);
+                for (Consumer<byte[]> listener : receiveListeners) {
+                    try {
+                        listener.accept(chunk);
+                    } catch (RuntimeException e) {
+                        Console.log("J1 receive listener failed: " + e);
+                    }
+                }
+            }
+        } catch (InterruptedException e) {
+            // stopReader() asked us to stop.
+        } catch (SerialPortException e) {
+            Console.log("J1 reader stopped: " + e.getExceptionType());
+            return;
+        }
+        Console.log("J1 reader stopped");
     }
 
     /** Best-effort port close; swallows exceptions. */

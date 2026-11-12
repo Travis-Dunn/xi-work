@@ -3,6 +3,7 @@ package com.imet.ui;
 import com.imet.serial.DeviceScanner;
 import com.imet.ui.views.ConfigurationPanel;
 import com.imet.ui.views.HardwarePanel;
+import com.imet.ui.views.X4DataPanel;
 import com.imet.ui.views.XQ2DataPanel;
 
 import javax.swing.*;
@@ -47,11 +48,14 @@ public class TabContentPanel extends JPanel {
         hardwarePanel.setDeviceSelectionListener(this::onDeviceSelected);
 
         // Forward J1 connect/disconnect events to the Configuration panel so it
-        // can enable its Fetch button and access the device for polling.
+        // can enable its Fetch button and access the device for polling, and
+        // to the X4 Data panel for its J1 terminal.
         hardwarePanel.setConnectionListener(conn -> {
             for (Component c : bodyPanel.getComponents()) {
                 if (c instanceof ConfigurationPanel cp) {
                     cp.setConnection(conn);
+                } else if (c instanceof X4DataPanel dp) {
+                    dp.setConnection(conn);
                 }
             }
         });
@@ -66,6 +70,10 @@ public class TabContentPanel extends JPanel {
         // Remove all cards except Hardware
         for (Component c : bodyPanel.getComponents()) {
             if (c != hardwarePanel) {
+                // Stop a discarded Data panel from listening to J1.
+                if (c instanceof X4DataPanel dp) {
+                    dp.setConnection(null);
+                }
                 bodyPanel.remove(c);
             }
         }
@@ -79,7 +87,7 @@ public class TabContentPanel extends JPanel {
                 views.add(VIEW_CONFIGURATION);
                 views.add(VIEW_DATA);
                 bodyPanel.add(new ConfigurationPanel(), VIEW_CONFIGURATION);
-                bodyPanel.add(createPlaceholder("X4 Data"), VIEW_DATA);
+                bodyPanel.add(new X4DataPanel(), VIEW_DATA);
             }
             case "IMet-XQ2" -> {
                 views.add(VIEW_DATA);

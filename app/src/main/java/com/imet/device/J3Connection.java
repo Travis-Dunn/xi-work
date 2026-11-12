@@ -1,5 +1,6 @@
 package com.imet.device;
 
+import com.imet.Console;
 import jssc.SerialPort;
 import jssc.SerialPortException;
 
@@ -45,6 +46,7 @@ public class J3Connection implements AutoCloseable {
                     + ". Disconnect first.");
         }
 
+        Console.log("J3 opening " + portName + " at " + baudRate + " 8-N-1");
         SerialPort port = new SerialPort(portName);
         try {
             port.openPort();
@@ -55,8 +57,10 @@ public class J3Connection implements AutoCloseable {
 
             // Port is open and settled — keep it.
             this.serialPort = port;
+            Console.log("J3 port open");
 
         } catch (SerialPortException e) {
+            Console.log("J3 open failed: " + e.getExceptionType());
             closeQuietly(port);
             throw new IOException("Failed to open " + portName + ": "
                     + e.getExceptionType(), e);
@@ -71,6 +75,7 @@ public class J3Connection implements AutoCloseable {
     /** Closes the serial port if open. Safe to call multiple times. */
     public void disconnect() {
         if (serialPort != null) {
+            Console.log("J3 closing " + serialPort.getPortName());
             closeQuietly(serialPort);
             serialPort = null;
         }
