@@ -173,8 +173,31 @@ public class X4Connection implements AutoCloseable {
     }
 
     /**
-     * Returns the configuration from the last {@link #readSettings}, or
-     * {@code null} if it hasn't been read on this connection.
+     * Writes settings to the device, then reads the device's settings
+     * back and keeps them for {@link #getSettings} (SoW #26). Takes a few
+     * seconds, so don't call it on the EDT. Never throws.
+     *
+     * @param wanted the settings to write, from {@link X4Settings#toWrite}
+     * @return the settings the device does not now hold as asked, by name;
+     *         empty if it took them all
+     */
+    public List<String> configure(X4Settings wanted) {
+        Console.log("J1 configuring the X4");
+        X4SettingsWriter.write(plugin, wanted);
+        X4Settings now = readSettings();
+        List<String> refused = X4SettingsWriter.differences(wanted, now);
+        if (refused.isEmpty()) {
+            Console.log("X4 configured");
+        } else {
+            Console.log("X4 did not take: " + String.join(", ", refused));
+        }
+        return refused;
+    }
+
+    /**
+     * Returns the configuration from the last {@link #readSettings} or
+     * {@link #configure}, or {@code null} if it hasn't been read on this
+     * connection.
      */
     public X4Settings getSettings() {
         return settings;

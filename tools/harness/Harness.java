@@ -47,6 +47,52 @@ public class Harness {
         }
         return sb.toString();
     }
+    @SuppressWarnings("unchecked")
+    static void pick(Object cp, int port, String item) throws Exception {
+        ((Map<Integer, JComboBox<String>>) get(cp, "portCombos")).get(port).setSelectedItem(item);
+    }
+    static Object sensor(Object cp, int port) throws Exception {
+        return ((Map<?, ?>) get(cp, "sensorFields")).get(port);
+    }
+    static JTextField field(Object rec, String name) throws Exception {
+        Method m = rec.getClass().getDeclaredMethod(name); m.setAccessible(true); return (JTextField) m.invoke(rec);
+    }
+    static JTextField[] tcal(Object rec) throws Exception {
+        Method m = rec.getClass().getDeclaredMethod("tcal"); m.setAccessible(true); return (JTextField[]) m.invoke(rec);
+    }
+    static void clickConfigure(Object cp) throws Exception {
+        JButton b = (JButton) get(cp, "configureButton");
+        SwingUtilities.invokeAndWait(b::doClick);
+        long t0 = System.currentTimeMillis();
+        Thread.sleep(100);
+        while (!b.isEnabled() && System.currentTimeMillis() - t0 < 60000) Thread.sleep(50);
+        Thread.sleep(200);
+        System.out.println("HARNESS configure took ~" + (System.currentTimeMillis() - t0) + " ms; status=[" + ((JLabel) get(cp, "statusLabel")).getText() + "]");
+    }
+    /* CONFIGURE=1: fill in the Configuration screen and click Configure X4,
+       first with a mistake in it, then corrected. */
+    static void configure(Object hw, Object cp, JFrame frame, String out, String tag) throws Exception {
+        String[] coefficients = {"+8.95098529E-004", "+2.95526317E-004", "-3.33149775E-006", "+2.57965989E-007"};
+        SwingUtilities.invokeAndWait(() -> { try {
+            ((JTextField) get(cp, "srnField")).setText("XI123");
+            ((JSpinner) get(cp, "dpfSpinner")).setValue(Double.parseDouble(System.getenv().getOrDefault("DPF", "2.5")));
+            ((JSpinner) get(cp, "cpbSpinner")).setValue(28.0389);
+            ((JComboBox<?>) get(cp, "j3BaudCombo")).setSelectedItem("57600");
+            ((JToggleButton) get(cp, "dataToggle")).setSelected(true);
+            pick(cp, 9, "10085B iMet-X4 Temperature Sensor");
+            field(sensor(cp, 9), "atSerial").setText("11111");
+            for (int i = 0; i < 3; i++) tcal(sensor(cp, 9))[i].setText(coefficients[i]);   // TCal4 left blank
+            pick(cp, 8, "No Sensor");
+            pick(cp, 4, "10086B iMet-X4 Humidity Sensor");
+        } catch (Exception e) { throw new RuntimeException(e); } });
+        clickConfigure(cp);
+        shot(frame.getContentPane(), out + "/" + tag + "-config-error.png");
+        SwingUtilities.invokeAndWait(() -> { try { tcal(sensor(cp, 9))[3].setText(coefficients[3]); } catch (Exception e) { throw new RuntimeException(e); } });
+        clickConfigure(cp);
+        System.out.println("HARNESS after configure j3Baud(hardware)=" + ((JComboBox<?>) get(hw, "j3BaudCombo")).getSelectedItem()
+                + " srn=" + ((JTextField) get(cp, "srnField")).getText() + " dpf=" + ((JSpinner) get(cp, "dpfSpinner")).getValue()
+                + " cpb=" + ((JSpinner) get(cp, "cpbSpinner")).getValue() + " tcal1=" + tcal(sensor(cp, 9))[0].getText());
+    }
     public static void main(String[] a) throws Exception {
         String port = a[0], out = a[1], tag = a.length > 2 ? a[2] : "run";
         com.imet.App.main(new String[0]);
@@ -95,6 +141,7 @@ public class Harness {
             for (Map.Entry<?, ?> e : pc.entrySet()) sb.append(" J").append(e.getKey()).append("=").append(((JComboBox<?>) e.getValue()).getSelectedItem());
             sb.append(" status=[").append(((JLabel) get(cp, "statusLabel")).getText()).append("]");
             System.out.println("HARNESS config " + sb);
+            if (System.getenv("CONFIGURE") != null) configure(hw, cp, frame, out, tag);
             // The user edits a field, leaves the screen, and comes back: it must survive.
             SwingUtilities.invokeAndWait(() -> { try { ((JTextField) get(cp, "srnField")).setText("EDITED"); } catch (Exception e) { throw new RuntimeException(e); } });
             shot(frame.getContentPane(), out + "/" + tag + "-config.png");

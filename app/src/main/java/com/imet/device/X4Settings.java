@@ -66,6 +66,22 @@ public final class X4Settings {
         this.missing = List.copyOf(missing);
     }
 
+    /**
+     * The settings to write to a device (SoW #26). Every value must be
+     * given. A port left out of {@code ports} is not written, so the
+     * device keeps whatever it has there. The board data format is always
+     * {@code 0,0}: comma delimited, every column (SoW #16).
+     */
+    public static X4Settings toWrite(String serialNumber,
+                                     String dataPublishingFrequency,
+                                     String pressureBias, String j3BaudRate,
+                                     boolean dataPublishing,
+                                     Map<Integer, Port> ports) {
+        return new X4Settings(serialNumber, dataPublishingFrequency,
+                pressureBias, j3BaudRate, dataPublishing, "0,0", ports,
+                List.of());
+    }
+
     /** /SRN */
     public String serialNumber() { return serialNumber; }
 

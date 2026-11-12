@@ -89,9 +89,12 @@ skipping streamed data lines.
     `pressureBias`, `toggleDataPublishing` (1/0 in the lexicon, ON/OFF on the
     device), `j3BaudRate`
   - query only: `boardDataFormat` (/CBD?, returns e.g. `0,30720`)
-  - parameterized: `configurePortToEmpty` / `AirThermistor` / `HYT271` /
-    `SerialForward` for ports 4–9. They return the values the lexicon lists.
-    The trailing bitmask is NOT returned.
+  - query only: `acknowledgeDevice` (/ACK?, returns 1 or 0)
+  - command only: `resetBoardData` (/CBD=0,0)
+  - parameterized + command: `configurePortToEmpty` / `AirThermistor` /
+    `HYT271` / `SerialForward` for ports 4–9. The queries return the values
+    the lexicon lists; the trailing bitmask is NOT returned. The commands
+    take the port, then those same values, and always send a bitmask of 0.
 - **Lexicon** (`lexiconVersion` 0.2.0, 22 messages): added `j3BaudRate` and
   `boardDataFormat`. Fixed `serialNumber`'s `return_q`, and the duplicate
   `return_p` → `return_p_len` in all four `configurePortTo…`.
@@ -105,6 +108,14 @@ skipping streamed data lines.
   - A setting with no reply is named in `X4Settings.missing()` and reported
     on screen. After two unanswered queries in a row the rest are skipped.
   - `X4Connection.sendCommand` has been removed.
+- **Configure X4 (#26):** `X4Connection.configure(wanted)` writes every
+  setting on the Configuration screen (`X4SettingsWriter`), waits for the X4
+  to ACK again, reads all the settings back, and returns the names of any
+  the X4 doesn't hold as asked. The X4 never acknowledges an assignment, so
+  the read-back is the only check. The other screens are then given the new
+  settings. A port showing "Other (left unchanged)" is not written. Board
+  data is always written as `/CBD=0,0` (SoW #16), so a device on the factory
+  `0,30720` gains the four battery columns the first time it is configured.
 - **Console:** every J1 op, raw byte, reply and plugin decision is logged with
   timestamps. The console test menu (stdin) is ON: `CONSOLE_TEST_ENABLED` in
   `MainFrame`. It exercises plugin messages over the GUI's J1 connection.
@@ -141,6 +152,19 @@ skipping streamed data lines.
 | 39 X4 picture | Done. |
 
 I checked the layout against XS on Windows; it looks good.
+
+## SoW #14–#26 (X4 Configuration screen) status
+
+| # | Status |
+|---|---|
+| 14 Poll at connect | Done. |
+| 15 X4 image | Done. |
+| 16 Sensor options and fields | Done, except the TCal "Load from File" button (disabled; file format unknown). |
+| 17–21 Serial, frequency, bias, J3 baud, data toggle | Read and write done. |
+| 22 Restore Defaults | Button disabled; TBD in the SoW. |
+| 23 Fetch | Not implemented, as the SoW says. |
+| 24, 25 Load from File, Save to File | Buttons disabled; TBD in the SoW. |
+| 26 Configure X4 | Done, with read-back check. Not yet tried on a real X4. |
 
 ## Open items, most pressing first
 
@@ -217,8 +241,10 @@ I checked the layout against XS on Windows; it looks good.
 
 ## Suggested next steps
 
-1. Sensor fields and Configure X4 (#16–#21, #26). After Configure the
-   settings must be read again, or the Data screen's format goes stale.
-2. J3 reader and terminal (#34).
-3. Logging and Mark (#37, #38).
-4. Card buttons (#35, #36).
+1. J3 reader and terminal (#34). If Configure X4 changes the J3 baud while
+   J3 is connected, the J3 connection is left at the old rate.
+2. Logging and Mark (#37, #38).
+3. Card buttons (#35, #36).
+4. Waiting on the client: the TCal "Load from File" (needs a sample
+   calibration file), and Restore Defaults, Load from File and Save to File
+   (#22, #24, #25, TBD in the SoW). Their buttons are shown but disabled.

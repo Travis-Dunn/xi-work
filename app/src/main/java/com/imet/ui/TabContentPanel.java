@@ -90,6 +90,11 @@ public class TabContentPanel extends JPanel {
                 X4DataPanel data = new X4DataPanel();
                 // If J1 is already connected (the product was picked
                 // again), the new panels still need its settings.
+                // After Configure X4, the other screens follow the device.
+                configuration.setSettingsListener(settings -> {
+                    data.settingsChanged(settings);
+                    hardwarePanel.settingsChanged(settings);
+                });
                 configuration.setConnection(hardwarePanel.getJ1Connection());
                 data.setConnection(hardwarePanel.getJ1Connection());
                 bodyPanel.add(configuration, VIEW_CONFIGURATION);

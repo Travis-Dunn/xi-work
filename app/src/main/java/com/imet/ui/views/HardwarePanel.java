@@ -775,6 +775,16 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
     }
 
     /**
+     * Called when the X4's settings have been read again (after Configure
+     * X4): the J3 baud menu follows the device, unless J3 is in use.
+     */
+    public void settingsChanged(X4Settings settings) {
+        if (!j3Connected && settings.j3BaudRate() != null) {
+            applyJ3Baud(settings.j3BaudRate());
+        }
+    }
+
+    /**
      * Returns the J1 connection if one is open, otherwise {@code null}.
      */
     public X4Connection getJ1Connection() {

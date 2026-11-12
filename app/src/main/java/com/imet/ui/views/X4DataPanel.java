@@ -266,10 +266,21 @@ public class X4DataPanel extends JPanel {
             conn.addReceiveListener(j1Receiver);
         }
 
+        settingsChanged((conn != null) ? conn.getSettings() : null);
+    }
+
+    /**
+     * Called when the X4's settings have been read again (after Configure
+     * X4), since they decide which port rows are shown and how a data line
+     * is laid out.
+     *
+     * @param settings the device's settings, or {@code null} if they are
+     *                 not known
+     */
+    public void settingsChanged(X4Settings settings) {
         lineBuffer.setLength(0);
         unmatchedLines = 0;
 
-        X4Settings settings = (conn != null) ? conn.getSettings() : null;
         if (settings == null) {
             // Disconnected. The last values stay on screen, like the
             // terminal's history, but nothing new is parsed.

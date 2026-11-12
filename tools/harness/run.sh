@@ -9,6 +9,9 @@
 # Set POKE to a command to send the fake X4 mid-run, behind the app's
 # back, e.g. POKE=/CBD=0,0 to change the data format under it.
 #
+# Set CONFIGURE=1 to also fill in the Configuration screen and click
+# Configure X4 (once with a blank TCal4, then corrected).
+#
 # Output goes to tools/harness/out/: <tag>-config.png, <tag>-data.png,
 # and the app's console log in out-<tag>.log.
 set -u
