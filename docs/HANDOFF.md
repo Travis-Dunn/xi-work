@@ -83,7 +83,7 @@ skipping streamed data lines.
 - **The plugin** (`PluginTestExample`):
   - prefix-matches replies, skips data lines and ignores a leading `/`
   - runs one call at a time (`synchronized`)
-  - ACK and query timeouts are both 500 ms
+  - ACK and query timeouts are both 2 s (see open item 1)
 - **Supported messages:**
   - query + command: `serialNumber`, `dataPublishingFrequency`,
     `pressureBias`, `toggleDataPublishing` (1/0 in the lexicon, ON/OFF on the
@@ -96,10 +96,14 @@ skipping streamed data lines.
   `boardDataFormat`. Fixed `serialNumber`'s `return_q`, and the duplicate
   `return_p` → `return_p_len` in all four `configurePortTo…`.
 - **App use of the plugin:**
-  - J1 connect queries `j3BaudRate`.
-  - The Configuration fetch uses the plugin; it runs when the Configuration
-    screen is shown. Each port needs at most two `_p` calls: "empty?", then
-    the sensor this screen offers for that port.
+  - J1 connect reads every setting once (`X4Connection.readSettings`, SoW
+    #14) into an `X4Settings`, including `boardDataFormat`. The Hardware,
+    Configuration and Data screens all use that one read
+    (`connection.getSettings()`); nothing re-reads while connected.
+  - Each port needs up to four `_p` calls: "empty?", then each sensor,
+    starting with the one the port is meant for.
+  - A setting with no reply is named in `X4Settings.missing()` and reported
+    on screen. After two unanswered queries in a row the rest are skipped.
   - `X4Connection.sendCommand` has been removed.
 - **Console:** every J1 op, raw byte, reply and plugin decision is logged with
   timestamps. The console test menu (stdin) is ON: `CONSOLE_TEST_ENABLED` in
@@ -156,10 +160,11 @@ I checked the layout against XS on Windows; it looks good.
      | TDP off | 7–50 | 0 |
      | DPF 0.5 | 14–70 | 0 |
 
-   - Options:
-     - Interim: raise the plugin's ACK and query timeouts to about 2 s.
-     - Longer term: turn TDP off while reading the configuration, if the
-       client says XS did.
+   - Done 2026-11-12: both timeouts raised to 2 s. The client doesn't see
+     the latency as a problem. Retrying was discussed and deferred as
+     polish.
+   - Longer term: turn TDP off while reading the configuration, if the
+     client says XS did.
    - Draft client questions:
      - Is this expected from the firmware?
      - What's the longest a reply can take?
@@ -168,11 +173,9 @@ I checked the layout against XS on Windows; it looks good.
      - Could GPS state matter? (0 vs 10 satellites on different days.)
 2. **DPF=10 gives `DPF=ERR`.** The manual says "between 0 and 10", but the
    Configuration spinner allows 10. Ask the client.
-3. **#14: poll on connect.**
-   - Today the fetch runs when the Configuration screen is shown.
-   - #14 wants it at connect, including `boardDataFormat`, with the results
-     shared with the Data screen (#27).
-   - This would replace the separate J3 query in `HardwarePanel`.
+3. **#14: poll on connect.** Done 2026-11-12 (see Architecture). Still
+   open: the client asked for a cache that re-reads whenever something
+   changes; for now it is read once per connection.
 4. **Port bitmask.** The `configurePortTo…` returns omit each sensor's
    trailing bitmask, which the Data screen needs if a port masks columns.
    Lexicon decision pending.
@@ -197,13 +200,15 @@ I checked the layout against XS on Windows; it looks good.
 10. **`notes.txt`** (SoW requirement status and client questions) didn't come
     across from the old repo.
 11. **Test tools.** The rounded-button code is duplicated per panel; a shared
-    helper would be a small cleanup. The hardware-free test tools lived in a
-    session scratchpad and will be lost:
-    - a fake X4 (Python on a pseudo-terminal, with modes `--stream`,
-      `--slash`, `--silent`, `--no-srn`, `--collide`)
-    - Java harnesses that drive the real panels through reflection under Xvfb
+    helper would be a small cleanup. The hardware-free test tools are now
+    under `tools/`:
+    - `tools/fake_x4.py`: a fake X4 on a pseudo-terminal (`--help` lists
+      its options, e.g. `--silent`, `--no-srn`, `--delay`, `--set`). Its
+      header text and `/VER?` reply are guesses.
+    - `tools/harness/run.sh`: runs the real app against the fake under
+      Xvfb, drives the panels through reflection, and prints what they show.
 
-    Recreate them as needed, or commit them under `tools/`. Gotchas:
+    Gotchas:
     - Run GUI harnesses with the distribution folder as the working
       directory, or `Loader` won't find the plugin.
     - A root container ignores jssc's exclusive port lock, so "port busy"
@@ -211,10 +216,9 @@ I checked the layout against XS on Windows; it looks good.
 
 ## Suggested next steps
 
-1. Decide the latency fix: an interim 2 s timeout, and/or ask the client.
-2. #14: fetch at connect, shared settings, `boardDataFormat`, and the bitmask
-   decision.
-3. Parser (#27–#32), after capturing a real header.
-4. J3 reader and terminal (#34).
-5. Logging and Mark (#37, #38).
-6. Card buttons (#35, #36).
+1. The port bitmask decision (open item 4), then the parser (#27–#32),
+   after capturing a real header.
+2. Sensor fields and Configure X4 (#16–#21, #26).
+3. J3 reader and terminal (#34).
+4. Logging and Mark (#37, #38).
+5. Card buttons (#35, #36).

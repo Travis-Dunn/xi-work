@@ -59,6 +59,12 @@ public class X4Connection implements AutoCloseable {
     private final PluginTest plugin;
 
     /**
+     * The device's configuration as read by {@link #readSettings}; null
+     * until then and after a disconnect.
+     */
+    private volatile X4Settings settings;
+
+    /**
      * @param plugin the loaded X4 plugin; it is given access to the port
      *               on {@link #connect} and released on {@link #disconnect}
      */
@@ -152,8 +158,31 @@ public class X4Connection implements AutoCloseable {
         return plugin;
     }
 
+    /**
+     * Reads the device's configuration through the plugin and keeps it for
+     * {@link #getSettings} (SoW #14). Takes a second or so, longer if the
+     * device is slow to answer, so don't call it on the EDT. Never throws:
+     * settings that could not be read are listed in
+     * {@link X4Settings#missing()}.
+     */
+    public X4Settings readSettings() {
+        Console.log("J1 reading the X4's settings");
+        X4Settings read = X4SettingsReader.read(plugin);
+        settings = read;
+        return read;
+    }
+
+    /**
+     * Returns the configuration from the last {@link #readSettings}, or
+     * {@code null} if it hasn't been read on this connection.
+     */
+    public X4Settings getSettings() {
+        return settings;
+    }
+
     /** Closes the serial port if open. Safe to call multiple times. */
     public void disconnect() {
+        settings = null;
         if (serialPort != null) {
             Console.log("J1 closing " + serialPort.getPortName());
             // The plugin goes first, while the reader still runs, in case

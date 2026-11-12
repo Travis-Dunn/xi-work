@@ -1,15 +1,12 @@
 package com.imet.ui.views;
 
-import com.imet.Console;
 import com.imet.device.X4Connection;
-import com.imet.plugin.PluginTest;
+import com.imet.device.X4Settings;
 
 import javax.swing.*;
 import java.awt.*;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
 
 /**
  * Configuration view panel. Displays:
@@ -22,8 +19,8 @@ import java.util.concurrent.ExecutionException;
  * </ul>
  *
  * <p>Call {@link #setConnection(X4Connection)} when the J1 connection is
- * established or dropped.  A live connection enables the Fetch button, which
- * queries the device for all current settings and populates the form fields.
+ * established or dropped.  On connect the form fields are filled from the
+ * settings read from the device (SoW #14); there is no Fetch button (#23).
  */
 public class ConfigurationPanel extends JPanel {
 
@@ -34,7 +31,7 @@ public class ConfigurationPanel extends JPanel {
     private static final Color ERROR_RED   = new Color(255, 25, 25);
 
     // ── Board-row interactive fields ─────────────────────────────────────────
-    // Promoted to instance scope so applyResults() can write to them after fetch.
+    // Instance scope so applySettings() can write to them.
 
     /** X4 Serial Number — free-text, up to 12 alphanumeric characters. */
     private JTextField srnField;
@@ -66,14 +63,14 @@ public class ConfigurationPanel extends JPanel {
 
     // ── Action buttons ───────────────────────────────────────────────────────
 
-    // (No Fetch button — fetch is triggered automatically on tab focus.)
+    // (No Fetch button — the settings are read when J1 connects.)
 
     // ── Status label ─────────────────────────────────────────────────────────
 
     /**
      * Unobtrusive label shown to the right of the "Configuration" heading.
-     * Displays "Fetching…" while a fetch is in progress, "Synced" once
-     * complete, or is blank when no connection is active.
+     * Displays "Synced" once the device's settings are shown, names any
+     * that could not be read, or is blank when no connection is active.
      */
     private JLabel statusLabel;
 
@@ -126,14 +123,6 @@ public class ConfigurationPanel extends JPanel {
         wrapper.add(card, BorderLayout.NORTH);
         add(wrapper, BorderLayout.CENTER);
 
-        // Auto-fetch whenever this panel becomes visible (e.g. user clicks
-        // "Configuration" in the breadcrumb, or navigates back to the tab).
-        addComponentListener(new java.awt.event.ComponentAdapter() {
-            @Override
-            public void componentShown(java.awt.event.ComponentEvent e) {
-                performFetch();
-            }
-        });
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -142,20 +131,19 @@ public class ConfigurationPanel extends JPanel {
 
     /**
      * Called by the parent panel when the J1 connection is established or
-     * dropped.  A non-null value enables the Fetch button; {@code null}
-     * disables it.
+     * dropped.  On connect, the fields are filled from the settings that
+     * were read from the device at that moment (SoW #14).  They are not
+     * read again while connected, so switching to this screen never
+     * overwrites what the user has entered.
      *
      * @param conn the active {@link X4Connection}, or {@code null} if
      *             the connection has been closed
      */
     public void setConnection(X4Connection conn) {
         this.connection = conn;
-        if (conn != null && conn.isConnected()) {
-            // If the Configuration panel is already the active card, fetch now;
-            // otherwise the ComponentListener will fire when the user navigates here.
-            if (isShowing()) {
-                performFetch();
-            }
+        X4Settings settings = (conn != null) ? conn.getSettings() : null;
+        if (settings != null) {
+            applySettings(settings);
         } else {
             // Connection dropped — clear the status so stale "Synced" isn't shown.
             statusLabel.setText("");
@@ -163,187 +151,61 @@ public class ConfigurationPanel extends JPanel {
     }
 
     // ────────────────────────────────────────────────────────────────────────
-    //  Fetch from device
+    //  Settings from the device
     // ────────────────────────────────────────────────────────────────────────
 
     /**
-     * Asks the device, through the X4 plugin, for its current settings and
-     * populates the panel fields with the returned values.
-     *
-     * <p>Lexicon messages used (the X4 command each polls in brackets):
-     * <pre>
-     *   serialNumber (/SRN?)   dataPublishingFrequency (/DPF?)
-     *   pressureBias (/CPB?)   j3BaudRate (/CJ3?)
-     *   toggleDataPublishing (/TDP?)
-     *   configurePortTo... for ports 4-9 (/CJ4? - /CJ9?)
-     * </pre>
-     *
-     * <p>The plugin skips streamed data lines, so this works with data
-     * publishing on.  A setting with no reply is left at its current value.
+     * Shows the settings that were read from the X4 when J1 connected
+     * (SoW #14).  A setting that could not be read is left at its current
+     * value, and the status label says so.
      */
-    private void performFetch() {
-        // Silent no-op if not connected — called speculatively from componentShown
-        // before J1 may be established.
-        if (connection == null || !connection.isConnected()) return;
+    private void applySettings(X4Settings settings) {
 
-        statusLabel.setText("Fetching\u2026"); // "Fetching…"
-        statusLabel.setForeground(new Color(122, 162, 214)); // blue, matches app accent
+        // Serial number (alphanumeric, ≤12 chars)
+        if (settings.serialNumber() != null) {
+            srnField.setText(settings.serialNumber());
+        }
 
-        new SwingWorker<Map<String, String>, Void>() {
-
-            @Override
-            protected Map<String, String> doInBackground() {
-                PluginTest plugin = connection.getPlugin();
-                // Keyed by the X4 setting, as applyResults() expects.
-                Map<String, String> results = new LinkedHashMap<>();
-
-                String[][] settings = {
-                        {"SRN", "serialNumber"},
-                        {"DPF", "dataPublishingFrequency"},
-                        {"CPB", "pressureBias"},
-                        {"CJ3", "j3BaudRate"},
-                        {"TDP", "toggleDataPublishing"},
-                };
-                for (String[] setting : settings) {
-                    String value = ascii(plugin.messageType_q(bytes(setting[1])));
-                    if (value != null) {
-                        results.put(setting[0], value.trim());
-                    } else {
-                        Console.log("Fetch got no " + setting[1]);
-                    }
-                }
-
-                // Port sensors, as sensor IDs.
-                for (int port = 4; port <= 9; port++) {
-                    Integer id = querySensorId(plugin, port);
-                    if (id != null) {
-                        results.put("CJ" + port, id.toString());
-                    }
-                }
-
-                return results;
-            }
-
-            @Override
-            protected void done() {
-                Map<String, String> results;
-                try {
-                    results = get();
-                } catch (ExecutionException ex) {
-                    Console.log("Fetch failed: " + ex.getCause());
-                    statusLabel.setText("Fetch failed");
-                    statusLabel.setForeground(new Color(255, 25, 25));
-                    return;
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-
-                applyResults(results);
-                statusLabel.setText("Synced");
-                statusLabel.setForeground(new Color(0x999999));
-            }
-        }.execute();
-    }
-
-    /**
-     * Applies a map of {@code KEY → value} pairs returned by the device to the
-     * corresponding UI fields.  Unknown or missing keys are silently skipped so
-     * that a partial fetch (e.g. one field missed due to streaming noise) does
-     * not reset unrelated fields.
-     */
-    private void applyResults(Map<String, String> results) {
-
-        // Serial number (SRN=<alphanumeric, ≤12 chars>)
-        String srn = results.get("SRN");
-        if (srn != null) srnField.setText(srn);
-
-        // Data publishing frequency (DPF=<float 0–10>)
-        String dpf = results.get("DPF");
+        // Data publishing frequency (float, Hz)
+        String dpf = settings.dataPublishingFrequency();
         if (dpf != null) {
             try { dpfSpinner.setValue(Double.parseDouble(dpf)); }
             catch (NumberFormatException ignored) {}
         }
 
-        // Pressure bias (CPB=<float>)
-        String cpb = results.get("CPB");
+        // Pressure bias (float)
+        String cpb = settings.pressureBias();
         if (cpb != null) {
             try { cpbSpinner.setValue(Double.parseDouble(cpb)); }
             catch (NumberFormatException ignored) {}
         }
 
-        // J3 baud rate (CJ3=<integer baud>)
-        String cj3 = results.get("CJ3");
-        if (cj3 != null) j3BaudCombo.setSelectedItem(cj3.trim());
-
-        // Data publishing toggle (toggleDataPublishing: 1 = ON, 0 = OFF)
-        String tdp = results.get("TDP");
-        if (tdp != null) dataToggle.setSelected("1".equals(tdp.trim()));
-
-        // Port sensor types (CJ4–CJ9), as sensor IDs (§4.3)
-        for (int port = 4; port <= 9; port++) {
-            String val = results.get("CJ" + port);
-            if (val == null) continue;
-
-            try {
-                selectSensorById(portCombos.get(port), Integer.parseInt(val));
-            } catch (NumberFormatException ignored) {}
-        }
-    }
-
-    /**
-     * Asks the plugin which sensor a port is set to, using the lexicon's
-     * configurePortTo... parameterized queries.  Only the sensors this
-     * screen offers for the port are checked (see getSensorOptions()).
-     *
-     * @return the sensor ID, or {@code null} if a query got no reply or the
-     *         port is set to a sensor this screen doesn't offer
-     */
-    private static Integer querySensorId(PluginTest plugin, int port) {
-        String empty = ascii(plugin.messageType_p(bytes("configurePortToEmpty=" + port)));
-        if (empty == null) {
-            Console.log("Fetch got no sensor for J" + port);
-            return null;
-        }
-        if (empty.equals("1")) {
-            return 0;
+        // J3 baud rate
+        if (settings.j3BaudRate() != null) {
+            j3BaudCombo.setSelectedItem(settings.j3BaudRate());
         }
 
-        String message;
-        int sensorId;
-        switch (port) {
-            case 4, 5 -> {
-                message = "configurePortToHYT271";
-                sensorId = 4;
-            }
-            case 8, 9 -> {
-                message = "configurePortToAirThermistor";
-                sensorId = 3;
-            }
-            default -> {
-                Console.log("Fetch: J" + port + " is set to a sensor this screen doesn't offer");
-                return null;
+        // Data publishing toggle
+        if (settings.dataPublishing() != null) {
+            dataToggle.setSelected(settings.dataPublishing());
+        }
+
+        // Port sensor types, as sensor IDs (§4.3)
+        for (int port = X4Settings.FIRST_PORT; port <= X4Settings.LAST_PORT; port++) {
+            X4Settings.Port setting = settings.port(port);
+            if (setting != null) {
+                selectSensorById(portCombos.get(port), setting.sensorId());
             }
         }
 
-        byte[] values = plugin.messageType_p(bytes(message + "=" + port));
-        if (values == null) {
-            Console.log("Fetch got no sensor for J" + port);
-            return null;
+        if (settings.isComplete()) {
+            statusLabel.setText("Synced");
+            statusLabel.setForeground(new Color(0x999999));
+        } else {
+            statusLabel.setText("Could not read: "
+                    + String.join(", ", settings.missing()));
+            statusLabel.setForeground(ERROR_RED);
         }
-        if (values.length == 0) {
-            Console.log("Fetch: J" + port + " is set to a sensor this screen doesn't offer");
-            return null;
-        }
-        return sensorId;
-    }
-
-    private static byte[] bytes(String s) {
-        return s.getBytes(StandardCharsets.US_ASCII);
-    }
-
-    private static String ascii(byte[] b) {
-        return (b == null) ? null : new String(b, StandardCharsets.US_ASCII);
     }
 
     /**

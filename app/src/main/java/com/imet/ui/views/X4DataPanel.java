@@ -1,6 +1,7 @@
 package com.imet.ui.views;
 
 import com.imet.device.X4Connection;
+import com.imet.device.X4Settings;
 
 import javax.swing.*;
 import java.awt.*;
@@ -22,8 +23,9 @@ import java.util.function.Consumer;
  *   <li>Read-only J1 and J3 terminals along the bottom (#33, #34)</li>
  * </ul>
  *
- * <p>So far only the J1 terminal is live (see {@link #setConnection}); the
- * fields are not filled in yet and the buttons have no actions. Which
+ * <p>So far the J1 terminal is live and the port rows follow the X4's
+ * settings (see {@link #setConnection}); the fields are not filled in
+ * yet and the buttons have no actions. Which
  * data column feeds which field is described in
  * {@code docs/x4-data-format.md}.
  */
@@ -35,11 +37,12 @@ public class X4DataPanel extends JPanel {
     private static final Color BUTTON_TEXT  = Color.WHITE;
     private static final Color LABEL_TEXT   = new Color(0x666666);
     private static final Color UNIT_TEXT    = new Color(0x888888);
+    private static final Color ERROR_RED    = new Color(255, 25, 25);
 
     /** Sensor IDs used with /CJ4–/CJ9 (X4 manual section 4.3). */
-    public static final int SENSOR_NONE        = 0;
-    public static final int SENSOR_TEMPERATURE = 3;
-    public static final int SENSOR_HUMIDITY    = 4;
+    public static final int SENSOR_NONE        = X4Settings.SENSOR_NONE;
+    public static final int SENSOR_TEMPERATURE = X4Settings.SENSOR_TEMPERATURE;
+    public static final int SENSOR_HUMIDITY    = X4Settings.SENSOR_HUMIDITY;
 
     /**
      * Board field labels as {name, unit}, in data-column index order
@@ -207,6 +210,10 @@ public class X4DataPanel extends JPanel {
      * J1 terminal (#33). The terminal keeps its history after a
      * disconnect.
      *
+     * <p>On connect, each port row gets the fields of the sensor the X4
+     * said the port is configured for (#29), from the settings read at
+     * that moment (#14).
+     *
      * @param conn the active connection, or {@code null} once it closes
      */
     public void setConnection(X4Connection conn) {
@@ -217,6 +224,28 @@ public class X4DataPanel extends JPanel {
         if (conn != null) {
             conn.addReceiveListener(j1Receiver);
         }
+
+        X4Settings settings = (conn != null) ? conn.getSettings() : null;
+        if (settings == null) {
+            showStatus("Waiting for the X4's settings", false);
+            return;
+        }
+        for (int port = X4Settings.FIRST_PORT; port <= X4Settings.LAST_PORT; port++) {
+            X4Settings.Port setting = settings.port(port);
+            setPortSensor(port, setting != null ? setting.sensorId() : SENSOR_NONE);
+        }
+        if (settings.isComplete()) {
+            showStatus("", false);
+        } else {
+            // #27: without every setting the data format isn't known.
+            showStatus("Could not read: "
+                    + String.join(", ", settings.missing()), true);
+        }
+    }
+
+    private void showStatus(String text, boolean error) {
+        statusLabel.setText(text);
+        statusLabel.setForeground(error ? ERROR_RED : new Color(0x999999));
     }
 
     private JPanel createHeadingRow() {
