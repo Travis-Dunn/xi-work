@@ -4,11 +4,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 public class PluginTestExample implements PluginTest {
-    /* How long to wait for the reply to /ACK? before giving up. */
-    private static final long ACK_TIMEOUT_MS = 500;
+    /* How long to wait for the reply to /ACK? before giving up. While the
+       X4 is publishing data a reply can take longer than 500 ms (measured
+       up to 480 ms, with some later still), so allow 2 s. */
+    private static final long ACK_TIMEOUT_MS = 2000;
 
-    /* How long to wait for the reply to a query before giving up. */
-    private static final long REPLY_TIMEOUT_MS = 500;
+    /* How long to wait for the reply to a query before giving up. Same
+       reasoning as the ACK. */
+    private static final long REPLY_TIMEOUT_MS = 2000;
 
     /* Sensor IDs used with /CJ4-/CJ9 (manual 4.3). */
     private static final int SENSOR_NONE = 0;
