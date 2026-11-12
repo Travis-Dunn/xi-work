@@ -3,6 +3,7 @@ package com.imet.ui.views;
 import com.imet.AppPaths;
 import com.imet.Console;
 import com.imet.device.DataLog;
+import com.imet.device.J3Connection;
 import com.imet.device.X4Connection;
 import com.imet.device.X4DataFormat;
 import com.imet.device.X4Settings;
@@ -34,7 +35,8 @@ import java.util.function.Consumer;
  *
  * <p>The J1 terminal is live, and the board and port fields show the
  * latest data line once the X4's settings have been read (see
- * {@link #setConnection}). Logging and Mark work; the card buttons have
+ * {@link #setConnection}). The J3 terminal shows J3 while it is connected.
+ * Logging and Mark work; the card buttons have
  * no actions yet. Which data
  * column feeds which field is described in {@code docs/x4-data-format.md}.
  */
@@ -192,6 +194,13 @@ public class X4DataPanel extends JPanel {
     };
 
 
+    /** J3 connection feeding the J3 terminal; null when disconnected. */
+    private J3Connection j3Connection;
+
+    /** Hands J3 bytes from the J3 reader thread to the EDT. */
+    private final Consumer<byte[]> j3Receiver =
+            data -> SwingUtilities.invokeLater(() -> j3Terminal.append(data));
+
     // ── Data lines ───────────────────────────────────────────────────────────
 
     /**
@@ -303,6 +312,24 @@ public class X4DataPanel extends JPanel {
         logButton.setEnabled(conn != null);
 
         settingsChanged((conn != null) ? conn.getSettings() : null);
+    }
+
+    /**
+     * Called by the parent when the J3 connection is established or
+     * dropped. While connected, everything received on J3 is shown in the
+     * J3 terminal (#34). The terminal keeps its history after a
+     * disconnect. J3 is only shown: the fields and the log come from J1.
+     *
+     * @param conn the active connection, or {@code null} once it closes
+     */
+    public void setJ3Connection(J3Connection conn) {
+        if (j3Connection != null) {
+            j3Connection.removeReceiveListener(j3Receiver);
+        }
+        j3Connection = conn;
+        if (conn != null) {
+            conn.addReceiveListener(j3Receiver);
+        }
     }
 
     /**

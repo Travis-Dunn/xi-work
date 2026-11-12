@@ -78,6 +78,14 @@ class FakeX4:
         self.port = os.ttyname(self.slave)
         self.rx = b""
 
+        # J3: a second port that gets the same data lines (manual 4.1).
+        # Commands sent to it are ignored here. A pseudo-terminal has no
+        # baud rate, so opening it at the wrong one can't be simulated.
+        self.j3_master, self.j3_slave = os.openpty()
+        tty.setraw(self.j3_slave)
+        os.set_blocking(self.j3_master, False)
+        self.j3_port = os.ttyname(self.j3_slave)
+
     # ── Output ──────────────────────────────────────────────────────────
 
     def send(self, text):
@@ -177,6 +185,15 @@ class FakeX4:
 
     def data_line(self):
         return self.delimiter().join(self.columns()[1]) + "\r\n"
+
+    def publish(self):
+        """Sends a data line on J1 and J3."""
+        line = self.data_line()
+        self.send(line)
+        try:
+            os.write(self.j3_master, line.encode("latin-1"))
+        except BlockingIOError:
+            pass  # nobody is reading J3 and its buffer is full
 
     def header(self):
         headers = self.columns()[0]
@@ -285,13 +302,13 @@ class FakeX4:
                         line, pending = pending, None
                         self.handle(line)
                     if self.publishing():
-                        self.send(self.data_line())
+                        self.publish()
                     published = True
                 if now >= cycle_start + period:
                     cycle_start = now
                     published = busy <= 0
                     if published:
-                        self.send(self.data_line())
+                        self.publish()
                 until = cycle_start + (period if published else busy)
                 timeout = max(0.0, until - now)
             else:
@@ -322,7 +339,8 @@ class FakeX4:
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--link", help="make this path a symlink to the port")
+    p.add_argument("--link", help="make this path a symlink to the J1 port")
+    p.add_argument("--j3-link", help="make this path a symlink to the J3 port")
     p.add_argument("--tdp", choices=["on", "off"], default="on",
                    help="data publishing at start (default on, as shipped)")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
@@ -356,16 +374,22 @@ def main():
         if os.path.islink(args.link):
             os.unlink(args.link)
         os.symlink(x4.port, args.link)
-    print("fake X4 on %s%s" % (x4.port,
-                               " (link: %s)" % args.link if args.link else ""),
+    if args.j3_link:
+        if os.path.islink(args.j3_link):
+            os.unlink(args.j3_link)
+        os.symlink(x4.j3_port, args.j3_link)
+    print("fake X4: J1 on %s%s, J3 on %s%s" % (
+        x4.port, " (link: %s)" % args.link if args.link else "",
+        x4.j3_port, " (link: %s)" % args.j3_link if args.j3_link else ""),
           flush=True)
     try:
         x4.run()
     except KeyboardInterrupt:
         pass
     finally:
-        if args.link and os.path.islink(args.link):
-            os.unlink(args.link)
+        for link in (args.link, args.j3_link):
+            if link and os.path.islink(link):
+                os.unlink(link)
 
 
 if __name__ == "__main__":

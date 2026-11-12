@@ -60,6 +60,15 @@ public class TabContentPanel extends JPanel {
             }
         });
 
+        // Same for J3, which feeds the X4 Data panel's J3 terminal.
+        hardwarePanel.setJ3ConnectionListener(conn -> {
+            for (Component c : bodyPanel.getComponents()) {
+                if (c instanceof X4DataPanel dp) {
+                    dp.setJ3Connection(conn);
+                }
+            }
+        });
+
         // Initial state: just Hardware
         breadcrumbBar.setViews(List.of(VIEW_HARDWARE));
         showView(VIEW_HARDWARE);
@@ -73,6 +82,7 @@ public class TabContentPanel extends JPanel {
                 // Stop a discarded Data panel from listening to J1.
                 if (c instanceof X4DataPanel dp) {
                     dp.setConnection(null);
+                    dp.setJ3Connection(null);
                 }
                 bodyPanel.remove(c);
             }
@@ -97,6 +107,7 @@ public class TabContentPanel extends JPanel {
                 });
                 configuration.setConnection(hardwarePanel.getJ1Connection());
                 data.setConnection(hardwarePanel.getJ1Connection());
+                data.setJ3Connection(hardwarePanel.getJ3Connection());
                 bodyPanel.add(configuration, VIEW_CONFIGURATION);
                 bodyPanel.add(data, VIEW_DATA);
             }

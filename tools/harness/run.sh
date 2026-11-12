@@ -12,6 +12,7 @@
 # Set CONFIGURE=1 to also fill in the Configuration screen and click
 # Configure X4 (once with a blank TCal4, then corrected).
 #
+# Set J3=1 to also connect J3 and report the J3 terminal.
 # Set LOG=1 to also log J1 to out/<tag>-log.txt with two marks.
 #
 # Output goes to tools/harness/out/: <tag>-config.png, <tag>-data.png,
@@ -26,11 +27,13 @@ mkdir -p "$O"
 
 javac -d "$O" -cp "$D/xi-app.jar" "$H/Harness.java" || exit 1
 
-python3 "$ROOT/tools/fake_x4.py" --link "$O/port-$tag" "$@" > "$O/fake-$tag.log" 2>&1 &
+python3 "$ROOT/tools/fake_x4.py" --link "$O/port-$tag" --j3-link "$O/j3-$tag" "$@" > "$O/fake-$tag.log" 2>&1 &
 FAKE=$!
 sleep 0.5
 
 # The app looks for plugins/ and lexicons/ in its working directory.
+# J3=1 also connects J3 (the fake's second port).
+[ -n "${J3:-}" ] && export J3PORT="$O/j3-$tag"
 (cd "$D" && xvfb-run -a java -cp "xi-app.jar:$O" Harness \
     "$O/port-$tag" "$O" "$tag" ${POKE:+"$POKE"} < /dev/null > "$O/out-$tag.log" 2>&1)
 

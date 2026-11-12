@@ -116,6 +116,22 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
         this.connectionListener = listener;
     }
 
+    /**
+     * Optional callback fired when the J3 connection is established or
+     * dropped: the live {@link J3Connection} on connect, {@code null} on
+     * disconnect.  Used to feed the Data screen's J3 terminal.
+     */
+    private Consumer<J3Connection> j3ConnectionListener;
+
+    public void setJ3ConnectionListener(Consumer<J3Connection> listener) {
+        this.j3ConnectionListener = listener;
+    }
+
+    /** Returns the J3 connection if one is open, otherwise {@code null}. */
+    public J3Connection getJ3Connection() {
+        return j3Connected ? j3Connection : null;
+    }
+
     public HardwarePanel(DeviceScanner scanner) {
         setLayout(new BorderLayout());
         setBackground(BACKGROUND);
@@ -776,11 +792,25 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
 
     /**
      * Called when the X4's settings have been read again (after Configure
-     * X4): the J3 baud menu follows the device, unless J3 is in use.
+     * X4): the J3 baud menu follows the device.  If J3 is connected at a
+     * rate the device no longer uses, it is disconnected.
      */
     public void settingsChanged(X4Settings settings) {
-        if (!j3Connected && settings.j3BaudRate() != null) {
-            applyJ3Baud(settings.j3BaudRate());
+        String baud = settings.j3BaudRate();
+        if (baud == null) {
+            return;
+        }
+        if (j3Connected && !baud.equals(String.valueOf(j3Connection.getBaudRate()))) {
+            // The X4 restarted J3 at the new rate (manual 3.3.3); the open
+            // port would only show garbage from here on.
+            int oldBaud = j3Connection.getBaudRate();
+            forceDisconnectJ3();
+            applyJ3Baud(baud);
+            showErrorNotice("The X4's J3 baud rate changed from " + oldBaud + " to "
+                    + baud + ", so J3 was disconnected.<br><br>"
+                    + "Connect J3 again to use the new rate.");
+        } else if (!j3Connected) {
+            applyJ3Baud(baud);
         }
     }
 
@@ -840,13 +870,14 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
         final int finalBaudRate = baudRate;
         new SwingWorker<Void, Void>() {
             private String errorMessage;
+            private J3Connection opened;
 
             @Override
             protected Void doInBackground() {
                 try {
                     J3Connection connection = new J3Connection();
                     connection.connect(selectedPort, finalBaudRate);
-                    j3Connection = connection;
+                    opened = connection;
                 } catch (Exception e) {
                     errorMessage = e.getMessage();
                 }
@@ -865,7 +896,18 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
                     showErrorNotice(errorMessage);
                 } else {
                     // ── Connection succeeded ──
+                    if (!j1Connected) {
+                        // J1 was disconnected while J3 was opening.
+                        opened.disconnect();
+                        j3ConnectButton.setText("Connect");
+                        j3ConnectButton.setBackground(BUTTON_COLOR);
+                        return;
+                    }
+                    j3Connection = opened;
                     j3Connected = true;
+                    if (j3ConnectionListener != null) {
+                        j3ConnectionListener.accept(j3Connection);
+                    }
                     j3ConnectButton.setText("Disconnect");
                     j3ConnectButton.setBackground(DETECTED_GREEN);
                     j3ConnectButton.setEnabled(true);
@@ -884,6 +926,9 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
      */
     private void forceDisconnectJ3() {
         if (j3Connection != null) {
+            if (j3ConnectionListener != null) {
+                j3ConnectionListener.accept(null);
+            }
             j3Connection.disconnect();
             j3Connection = null;
         }

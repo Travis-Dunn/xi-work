@@ -36,6 +36,16 @@ public class Harness {
             } catch (Exception e) { throw new RuntimeException(e); }
         });
     }
+    static String terminalText(Object dp, String name) throws Exception {
+        return ((javax.swing.JTextArea) get(get(dp, name), "area")).getText();
+    }
+    static void dialogs() throws Exception {
+        for (Window w : Window.getWindows()) if (w instanceof JDialog d && d.isVisible()) {
+            java.util.List<String> t = new ArrayList<>(); texts(d.getContentPane(), t);
+            System.out.println("HARNESS dialog [" + d.getTitle() + "] " + t);
+            SwingUtilities.invokeAndWait(d::dispose);
+        }
+    }
     static String dataFields(Object dp) throws Exception {
         StringBuilder sb = new StringBuilder("board=[");
         for (JTextField f : (JTextField[]) get(dp, "boardFields")) sb.append(f.getText()).append('|');
@@ -162,6 +172,19 @@ public class Harness {
             System.out.println("HARNESS dialog [" + d.getTitle() + "] " + t);
             SwingUtilities.invokeAndWait(d::dispose);
         }
+        String j3Port = System.getenv("J3PORT");
+        if (j3Port != null && Boolean.TRUE.equals(get(hw, "j1Connected"))) {
+            SwingUtilities.invokeAndWait(() -> { try {
+                @SuppressWarnings("unchecked") JComboBox<String> combo = (JComboBox<String>) get(hw, "j3ComPortCombo");
+                combo.addItem(j3Port); combo.setSelectedItem(j3Port);
+                call(hw, "onJ3Connect");
+            } catch (Exception e) { throw new RuntimeException(e); } });
+            JButton j3 = (JButton) get(hw, "j3ConnectButton");
+            for (int i = 0; i < 100 && !j3.isEnabled(); i++) Thread.sleep(50);
+            Thread.sleep(200);
+            System.out.println("HARNESS J3 connected=" + get(hw, "j3Connected") + " button=[" + j3.getText() + "]");
+            dialogs();
+        }
         if (Boolean.TRUE.equals(get(hw, "j1Connected"))) {
             SwingUtilities.invokeAndWait(() -> tab.showView("Configuration"));
             Thread.sleep(500);
@@ -177,6 +200,7 @@ public class Harness {
             sb.append(" status=[").append(((JLabel) get(cp, "statusLabel")).getText()).append("]");
             System.out.println("HARNESS config " + sb);
             if (System.getenv("CONFIGURE") != null) configure(hw, cp, frame, out, tag);
+            if (j3Port != null) { System.out.println("HARNESS J3 after configure connected=" + get(hw, "j3Connected") + " baud menu=" + ((JComboBox<?>) get(hw, "j3BaudCombo")).getSelectedItem()); dialogs(); }
             // The user edits a field, leaves the screen, and comes back: it must survive.
             SwingUtilities.invokeAndWait(() -> { try { ((JTextField) get(cp, "srnField")).setText("EDITED"); } catch (Exception e) { throw new RuntimeException(e); } });
             shot(frame.getContentPane(), out + "/" + tag + "-config.png");
@@ -185,6 +209,12 @@ public class Harness {
             com.imet.ui.views.X4DataPanel dp = find(tab, com.imet.ui.views.X4DataPanel.class);
             System.out.println("HARNESS data status=[" + ((JLabel) get(dp, "statusLabel")).getText() + "] portRows=" + ((Map<?, ?>) get(dp, "portFields")).keySet());
             System.out.println("HARNESS data " + dataFields(dp));
+            if (j3Port != null) {
+                String j1 = terminalText(dp, "j1Terminal"), j3t = terminalText(dp, "j3Terminal");
+                String[] lines = j3t.split("\n");
+                System.out.println("HARNESS J3 terminal lines=" + (j3t.isEmpty() ? 0 : lines.length) + " J1 terminal lines=" + j1.split("\n").length
+                        + " last J3 line=[" + lines[lines.length - 1] + "]");
+            }
             if (System.getenv("LOG") != null) logging(dp, out, tag);
             shot(frame.getContentPane(), out + "/" + tag + "-data.png");
             if (a.length > 3) {
@@ -201,6 +231,7 @@ public class Harness {
             Thread.sleep(1500);
             System.out.println("HARNESS after returning to Configuration srn=" + ((JTextField) get(cp, "srnField")).getText());
             SwingUtilities.invokeAndWait(() -> { try { call(hw, "onJ1Connect"); } catch (Exception e) { throw new RuntimeException(e); } });
+            if (j3Port != null) System.out.println("HARNESS J3 after J1 disconnect connected=" + get(hw, "j3Connected") + " button=[" + ((JButton) get(hw, "j3ConnectButton")).getText() + "] enabled=" + ((JButton) get(hw, "j3ConnectButton")).isEnabled());
             System.out.println("HARNESS after disconnect config status=[" + ((JLabel) get(cp, "statusLabel")).getText() + "] data status=[" + ((JLabel) get(dp, "statusLabel")).getText() + "]");
         }
         System.exit(0);

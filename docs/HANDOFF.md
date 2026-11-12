@@ -163,7 +163,7 @@ skipping streamed data lines.
 | 31 Show exactly as sent | Done (`X4DataFormat`, with unit tests from a real capture). |
 | 32 Ignore header | Done as a precaution: a real X4 sends no header on J1 (captured 2026-11-12). |
 | 33 J1 terminal | Done (ASCII, 2000-line history, follows only at the bottom). |
-| 34 J3 terminal | Layout only; J3 has no reader. |
+| 34 J3 terminal | Done: `J3Connection` has its own reader thread feeding the J3 terminal. Tested on the fake X4 only (no J3 cable). |
 | 35 Erase Card | Button only. |
 | 36 Get from Card + progress | Button and hidden progress bar only. |
 | 37 Start/Stop Logging | Done. Records J1 byte for byte (`DataLog`); the save dialog opens in `<install dir>/Data` with a timestamped `.txt` name. Stops on disconnect. |
@@ -232,9 +232,11 @@ I checked the layout against XS on Windows; it looks good.
    match the app's.
 7. **Unplugged cable.** The reader logs it and stops, but the UI still says
    connected.
-8. **J3** has no reader yet (#34). It also doesn't fit pluginBase's
-   one-transport-per-device model: J3's baud comes from a J1 query. This
-   needs a deliberate design decision.
+8. **J3** (#34) is read by the app directly, with no plugin involved:
+   nothing is ever sent on J3, and its baud comes from the J1 settings. That
+   sidesteps pluginBase's one-transport-per-device model rather than
+   fitting it. If Configure X4 changes the J3 baud while J3 is connected,
+   J3 is disconnected with a notice.
 9. **Lexicon odds and ends:**
    - `forwardBytesToJ6`/`J7` list `return_p` on query/command messages.
    - `enablePort` `_p` isn't implemented.
@@ -244,7 +246,8 @@ I checked the layout against XS on Windows; it looks good.
 11. **Test tools.** The rounded-button code is duplicated per panel; a shared
     helper would be a small cleanup. The hardware-free test tools are now
     under `tools/`:
-    - `tools/fake_x4.py`: a fake X4 on a pseudo-terminal (`--help` lists
+    - `tools/fake_x4.py`: a fake X4 on two pseudo-terminals, J1 and J3
+      (`--help` lists
       its options, e.g. `--silent`, `--no-srn`, `--delay`, `--set`). Its
       header text and `/VER?` reply are guesses.
     - `tools/CaptureHeader.java`: records what a real X4 sends on J1 when
@@ -260,9 +263,8 @@ I checked the layout against XS on Windows; it looks good.
 
 ## Suggested next steps
 
-1. J3 reader and terminal (#34). If Configure X4 changes the J3 baud while
-   J3 is connected, the J3 connection is left at the old rate.
-2. Card buttons (#35, #36).
+1. Card buttons (#35, #36).
+2. Try J3 on a real X4 with the J3-to-USB cable.
 4. Waiting on the client: the TCal "Load from File" (needs a sample
    calibration file), and Restore Defaults, Load from File and Save to File
    (#22, #24, #25, TBD in the SoW). Their buttons are shown but disabled.
