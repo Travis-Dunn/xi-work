@@ -103,6 +103,102 @@ public class Harness {
                 + " srn=" + ((JTextField) get(cp, "srnField")).getText() + " dpf=" + ((JSpinner) get(cp, "dpfSpinner")).getValue()
                 + " cpb=" + ((JSpinner) get(cp, "cpbSpinner")).getValue() + " tcal1=" + tcal(sensor(cp, 9))[0].getText());
     }
+    static String form(Object cp) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        sb.append("srn=").append(((JTextField) get(cp, "srnField")).getText());
+        sb.append(" dpf=").append(((JSpinner) get(cp, "dpfSpinner")).getValue());
+        sb.append(" cpb=").append(((JSpinner) get(cp, "cpbSpinner")).getValue());
+        sb.append(" j3=").append(((JComboBox<?>) get(cp, "j3BaudCombo")).getSelectedItem());
+        sb.append(" tdp=").append(((JToggleButton) get(cp, "dataToggle")).isSelected());
+        for (Map.Entry<?, ?> e : ((Map<?, ?>) get(cp, "portCombos")).entrySet()) sb.append(" J").append(e.getKey()).append("=").append(((JComboBox<?>) e.getValue()).getSelectedItem());
+        sb.append(" status=[").append(((JLabel) get(cp, "statusLabel")).getText()).append("]");
+        return sb.toString();
+    }
+    static JButton button(Container c, String text) {
+        for (Component x : c.getComponents()) {
+            if (x instanceof JButton b && text.equals(b.getText()) && b.isEnabled()) return b;   // a sensor row has its own, disabled, "Load from File"
+            if (x instanceof Container cc) { JButton b = button(cc, text); if (b != null) return b; }
+        }
+        return null;
+    }
+    static <T> T inDialog(Class<T> k) throws Exception {
+        for (int i = 0; i < 50; i++) {
+            Thread.sleep(100);
+            for (Window w : Window.getWindows()) if (w instanceof JDialog d && d.isVisible()) { T t = find(d.getContentPane(), k); if (t != null) return t; }
+        }
+        return null;
+    }
+    /* Clicks a button that opens a file dialog, and picks the file in it
+       (or cancels, if file is null). */
+    static void clickAndChoose(JButton b, java.io.File file) throws Exception {
+        SwingUtilities.invokeLater(b::doClick);
+        JFileChooser c = inDialog(JFileChooser.class);
+        if (c == null) { System.out.println("HARNESS [" + b.getText() + "] opened no file dialog"); return; }
+        System.out.println("HARNESS [" + b.getText() + "] dialog title=[" + c.getDialogTitle() + "] offers " + (c.getSelectedFile() == null ? null : c.getSelectedFile().getName()));
+        SwingUtilities.invokeAndWait(() -> { if (file == null) c.cancelSelection(); else { c.setSelectedFile(file); c.approveSelection(); } });
+        Thread.sleep(300);
+    }
+    /* FILES=1: Save to File, change the screen, Load from File; then files
+       with mistakes in them. Nothing may reach the X4. */
+    static void files(Object cp, String out, String tag) throws Exception {
+        JButton save = button((Container) cp, "Save to File"), load = button((Container) cp, "Load from File");
+        java.io.File file = new java.io.File(out, tag + "-config.txt");
+        file.delete();
+        System.out.println("HARNESS files before " + form(cp));
+        clickAndChoose(save, file);
+        System.out.println("HARNESS saved status=[" + ((JLabel) get(cp, "statusLabel")).getText() + "]");
+        for (String line : java.nio.file.Files.readAllLines(file.toPath())) System.out.println("HARNESS file | " + line);
+        SwingUtilities.invokeAndWait(() -> { try {
+            ((JTextField) get(cp, "srnField")).setText("CHANGED");
+            ((JSpinner) get(cp, "dpfSpinner")).setValue(4.0);
+            ((JComboBox<?>) get(cp, "j3BaudCombo")).setSelectedItem("9600");
+            pick(cp, 9, "No Sensor"); pick(cp, 4, "No Sensor");
+        } catch (Exception e) { throw new RuntimeException(e); } });
+        clickAndChoose(load, file);
+        System.out.println("HARNESS loaded " + form(cp));
+        // Someone else's file: another serial number and bias, and no J3 line.
+        java.io.File other = new java.io.File(out, tag + "-other.txt");
+        java.nio.file.Files.writeString(other.toPath(), "serialNumber=OTHER1\npressureBias=-3.5\nJ8=temperature,555,1,2,3,4\nJ5=humidity,0x29\n");
+        clickAndChoose(load, other);
+        System.out.println("HARNESS loaded other " + form(cp) + " J8 serial=" + field(sensor(cp, 8), "atSerial").getText() + " J5 i2c=" + field(sensor(cp, 5), "i2c").getText());
+        // Mistakes: nothing on screen may change.
+        java.io.File bad = new java.io.File(out, tag + "-bad.txt");
+        java.nio.file.Files.writeString(bad.toPath(), "serialNumber=BAD\ndataPublishingFrequency=fast\n");
+        clickAndChoose(load, bad);
+        System.out.println("HARNESS loaded bad " + form(cp));
+        java.nio.file.Files.writeString(bad.toPath(), "serialNumber=BAD\nJ4=temperature,555,1,2,3,4\n");
+        clickAndChoose(load, bad);
+        System.out.println("HARNESS loaded wrong port " + form(cp));
+        clickAndChoose(load, new java.io.File(out, "no-such-file.txt"));
+        System.out.println("HARNESS loaded missing status=[" + ((JLabel) get(cp, "statusLabel")).getText() + "]");
+        clickAndChoose(save, null);
+        // Saving a screen with a mistake on it must say so and open no dialog.
+        SwingUtilities.invokeAndWait(() -> { try { ((JTextField) get(cp, "srnField")).setText("not valid!"); } catch (Exception e) { throw new RuntimeException(e); } });
+        SwingUtilities.invokeAndWait(save::doClick);
+        System.out.println("HARNESS save invalid status=[" + ((JLabel) get(cp, "statusLabel")).getText() + "]");
+        clickAndChoose(load, file);
+        System.out.println("HARNESS reloaded " + form(cp));
+    }
+    /* RESTORE=1: click Restore Data Defaults; cancel once, then confirm. */
+    static void restore(Object hw, Object cp, JFrame frame, String out, String tag) throws Exception {
+        JButton b = (JButton) get(cp, "restoreButton");
+        System.out.println("HARNESS restore before " + form(cp));
+        for (int answer : new int[] {JOptionPane.CANCEL_OPTION, JOptionPane.OK_OPTION}) {
+            SwingUtilities.invokeLater(b::doClick);
+            JOptionPane pane = inDialog(JOptionPane.class);
+            if (pane == null) { System.out.println("HARNESS restore asked nothing; status=[" + ((JLabel) get(cp, "statusLabel")).getText() + "]"); return; }
+            System.out.println("HARNESS restore asks [" + pane.getMessage() + "]");
+            if (answer == JOptionPane.OK_OPTION) shot(frame.getContentPane(), out + "/" + tag + "-restore-ask.png");
+            SwingUtilities.invokeAndWait(() -> pane.setValue(answer));
+            long t0 = System.currentTimeMillis();
+            Thread.sleep(200);
+            while (!b.isEnabled() && System.currentTimeMillis() - t0 < 90000) Thread.sleep(50);
+            Thread.sleep(200);
+            System.out.println("HARNESS restore answer=" + (answer == JOptionPane.OK_OPTION ? "OK" : "Cancel") + " took ~" + (System.currentTimeMillis() - t0) + " ms; " + form(cp)
+                    + " j3Baud(hardware)=" + ((JComboBox<?>) get(hw, "j3BaudCombo")).getSelectedItem());
+        }
+        shot(frame.getContentPane(), out + "/" + tag + "-restored.png");
+    }
     /* LOG=1: log to a file (skipping the file dialog), mark twice, stop. */
     static void logging(Object dp, String out, String tag) throws Exception {
         java.nio.file.Path file = java.nio.file.Path.of(out, tag + "-log.txt");
@@ -200,6 +296,8 @@ public class Harness {
             sb.append(" status=[").append(((JLabel) get(cp, "statusLabel")).getText()).append("]");
             System.out.println("HARNESS config " + sb);
             if (System.getenv("CONFIGURE") != null) configure(hw, cp, frame, out, tag);
+            if (System.getenv("FILES") != null) files(cp, out, tag);
+            if (System.getenv("RESTORE") != null) restore(hw, cp, frame, out, tag);
             if (j3Port != null) { System.out.println("HARNESS J3 after configure connected=" + get(hw, "j3Connected") + " baud menu=" + ((JComboBox<?>) get(hw, "j3BaudCombo")).getSelectedItem()); dialogs(); }
             // The user edits a field, leaves the screen, and comes back: it must survive.
             SwingUtilities.invokeAndWait(() -> { try { ((JTextField) get(cp, "srnField")).setText("EDITED"); } catch (Exception e) { throw new RuntimeException(e); } });
