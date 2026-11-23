@@ -23,6 +23,11 @@ public class PluginTestExample implements PluginTest {
        cycle. */
     private static final long ASSIGNMENT_SETTLE_MS = 1500;
 
+    /* How long to wait for the X4 to say an erase is finished. The manual
+       (3.3.11) gives no time; erasing empties one file, so this is
+       generous. */
+    private static final long ERASE_TIMEOUT_MS = 30000;
+
     /* Sensor IDs used with /CJ4-/CJ9 (manual 4.3). */
     private static final int SENSOR_NONE = 0;
     private static final int SENSOR_TEMPERATURE = 3;
@@ -70,6 +75,9 @@ public class PluginTestExample implements PluginTest {
         if (name.equals("acknowledgeDevice")) {
             return ascii(acknowledge() ? "1" : "0");
         }
+        if (name.equals("eraseSDCardData")) {
+            return ascii(eraseCard());
+        }
         String key = querySettingFor(name);
         if (key == null) {
             log("query [" + name + "] is not supported");
@@ -98,7 +106,15 @@ public class PluginTestExample implements PluginTest {
          configurePortToHYT271=4,0x28
          configurePortToSerialForward=6,<baud>,<columns>
        Each is sent with a bitmask of 0 (every column), as is
-       resetBoardData (/CBD=0,0), which takes no value. */
+       resetBoardData (/CBD=0,0), which takes no value.
+
+       The card commands take no value either:
+         eraseSDCardData  sends /ERD and waits for the X4 to finish. Use
+                          the query of the same name to learn how it went.
+         getSDCardData    sends /GET and returns at once. The card's
+                          log.dat then arrives on the port, in place of
+                          data lines, for the app to read: it can be far
+                          too large to hand back from one call. */
     @Override
     public synchronized void messageType_c(byte[] arg) {
         String argstr = new String(arg, StandardCharsets.US_ASCII);
@@ -112,6 +128,14 @@ public class PluginTestExample implements PluginTest {
         }
         if (name.equals("resetBoardData")) {
             send(name, "/CBD=0,0");
+            return;
+        }
+        if (name.equals("eraseSDCardData")) {
+            eraseCard();
+            return;
+        }
+        if (name.equals("getSDCardData")) {
+            startCardData();
             return;
         }
         if (name.startsWith("configurePortTo")) {
@@ -218,6 +242,40 @@ public class PluginTestExample implements PluginTest {
             line.append(",0");
         }
         return line.toString();
+    }
+
+    /* Sends /ERD, which empties log.dat on the microSD card, and waits
+       for the X4's answer (manual 3.3.11). Returns "1" for "Complete",
+       "0" for "Card not detected", or null if neither arrives in time. */
+    private String eraseCard() {
+        if (!isConnected()) {
+            log("[eraseSDCardData] needs a J1 connection");
+            return null;
+        }
+        try {
+            transport.flush();
+            transport.write("/ERD\r\n".getBytes(StandardCharsets.US_ASCII));
+            String line = readLineWithPrefix(ERASE_TIMEOUT_MS,
+                    "Complete", "Card not detected");
+            return (line == null) ? null : line.startsWith("Complete") ? "1" : "0";
+        } catch (IOException e) {
+            log("[eraseSDCardData] failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /* Sends /GET (manual 3.3.12) and reads nothing: what follows on the
+       port is the card's log.dat, which the app takes from there. */
+    private void startCardData() {
+        if (!isConnected()) {
+            log("command [getSDCardData] needs a J1 connection");
+            return;
+        }
+        try {
+            transport.write("/GET\r\n".getBytes(StandardCharsets.US_ASCII));
+        } catch (IOException e) {
+            log("command [getSDCardData] failed: " + e.getMessage());
+        }
     }
 
     /* Sends /ACK? and says whether the X4 answered (manual 3.3.10). */
@@ -331,6 +389,9 @@ public class PluginTestExample implements PluginTest {
         if (messageName.equals("boardDataFormat")) {
             return "CBD";
         }
+        if (messageName.equals("sdCardDataSize")) {
+            return "GET"; // /GET? gives the size; /GET sends the data
+        }
         return settingFor(messageName);
     }
 
@@ -385,11 +446,17 @@ public class PluginTestExample implements PluginTest {
         System.out.println("X4 plugin: " + message);
     }
 
-    /* Reads lines until one starts with prefix, discarding streamed data
-       lines along the way. A leading '/' on the reply is ignored: the
-       manual shows poll replies both with and without it. Returns the line
-       without the '/', or null if no such line arrives before the timeout. */
     private String readLineWithPrefix(String prefix, long timeoutMs)
+            throws IOException {
+        return readLineWithPrefix(timeoutMs, prefix);
+    }
+
+    /* Reads lines until one starts with one of the prefixes, discarding
+       streamed data lines along the way. A leading '/' on the reply is
+       ignored: the manual shows poll replies both with and without it.
+       Returns the line without the '/', or null if no such line arrives
+       before the timeout. */
+    private String readLineWithPrefix(long timeoutMs, String... prefixes)
             throws IOException {
         StringBuilder sb = new StringBuilder();
         long deadline = System.currentTimeMillis() + timeoutMs;
@@ -407,8 +474,10 @@ public class PluginTestExample implements PluginTest {
                 if (line.startsWith("/")) {
                     line = line.substring(1);
                 }
-                if (line.startsWith(prefix)) {
-                    return line;
+                for (String prefix : prefixes) {
+                    if (line.startsWith(prefix)) {
+                        return line;
+                    }
                 }
             }
         }
