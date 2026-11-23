@@ -13,6 +13,11 @@ import java.util.Map;
  * Values are kept as text, exactly as the plugin returned them. A value
  * that could not be read is {@code null} and is named in
  * {@link #missing()}.
+ * <p>
+ * The same class holds settings to write to the device
+ * ({@link #toWrite}) and settings loaded from a file
+ * ({@link X4SettingsFile}), where {@code null} means the file leaves that
+ * setting out.
  */
 public final class X4Settings {
 
@@ -80,6 +85,20 @@ public final class X4Settings {
         return new X4Settings(serialNumber, dataPublishingFrequency,
                 pressureBias, j3BaudRate, dataPublishing, "0,0", ports,
                 List.of());
+    }
+
+    /**
+     * The settings Restore Data Defaults writes (SoW #22): J3 at 115200
+     * baud, no sensor on J4 to J9, publishing at 1 Hz, every board column,
+     * data on. The serial number and pressure bias are not defaults; give
+     * the device's own so that they stay as they are.
+     */
+    public static X4Settings dataDefaults(String serialNumber, String pressureBias) {
+        Map<Integer, Port> ports = new LinkedHashMap<>();
+        for (int port = FIRST_PORT; port <= LAST_PORT; port++) {
+            ports.put(port, new Port(SENSOR_NONE, ""));
+        }
+        return toWrite(serialNumber, "1", pressureBias, "115200", true, ports);
     }
 
     /** /SRN */
