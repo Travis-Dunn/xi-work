@@ -49,6 +49,12 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
     /** Global flag for manufacturing feature visibility (SoW req #5). */
     private boolean manufacturingEnabled = false;
 
+    /** Shows what the selected tab is sending to its device. */
+    private final ActivityBar activityBar = new ActivityBar();
+
+    /** Turns the indicator to "Idle" once nothing has been sent for a while. */
+    private final Timer activityTimer = new Timer(500, e -> refreshActivity());
+
     DeviceScanner deviceScanner;
     private final ResourceScanner resourceScanner;
     private final Thread consoleThread;
@@ -116,6 +122,12 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
 
         setLayout(new BorderLayout());
         add(tabbedPane, BorderLayout.CENTER);
+
+        // The activity indicator: what the selected tab is sending. A
+        // manufacturing feature, so hidden until those are enabled.
+        activityBar.setVisible(false);
+        add(activityBar, BorderLayout.SOUTH);
+        tabbedPane.addChangeListener(e -> refreshActivity());
 
 
     }
@@ -409,6 +421,14 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
             deviceScanner.stop();
         }
 
+        activityBar.setVisible(manufacturingEnabled);
+        if (manufacturingEnabled) {
+            refreshActivity();
+            activityTimer.start();
+        } else {
+            activityTimer.stop();
+        }
+
         // Propagate to every tab's HardwarePanel.
         for (int i = 0; i < tabbedPane.getTabCount(); i++) {
             Component comp = tabbedPane.getComponentAt(i);
@@ -416,6 +436,17 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
                 tcp.GetHardwarePanel().setManufacturingEnabled(manufacturingEnabled);
             }
         }
+    }
+
+    /** Shows the selected tab's activity in the activity indicator. */
+    private void refreshActivity() {
+        if (!manufacturingEnabled) {
+            return;
+        }
+        TabContentPanel.Sent sent =
+                (tabbedPane.getSelectedComponent() instanceof TabContentPanel tab)
+                        ? tab.getLastSent() : null;
+        activityBar.show(sent, System.currentTimeMillis());
     }
 
     /**
@@ -470,6 +501,9 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
         // A new tab has to be told what the scanner already found, or it
         // takes every product's lexicon and plugin to be missing.
         showResources(content.GetHardwarePanel());
+        // Likewise the manufacturing setting, which may already be on.
+        content.GetHardwarePanel().setManufacturingEnabled(manufacturingEnabled);
+        content.setActivityListener(this::refreshActivity);
         tabbedPane.addTab(title, content);
 
         int index = tabbedPane.indexOfComponent(content);

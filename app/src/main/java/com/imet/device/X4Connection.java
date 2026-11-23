@@ -56,6 +56,9 @@ public class X4Connection implements AutoCloseable {
     /** Called on the reader thread with each chunk of bytes received. */
     private final List<Consumer<byte[]>> receiveListeners = new CopyOnWriteArrayList<>();
 
+    /** Told everything sent on J1. */
+    private final List<Consumer<byte[]>> sendListeners = new CopyOnWriteArrayList<>();
+
     /** Device plugin that verifies the device once the port is open. */
     private final PluginTest plugin;
 
@@ -113,6 +116,11 @@ public class X4Connection implements AutoCloseable {
         // from here on it is the only reader, and the plugin's transport
         // gets its bytes from it.
         transport = new SerialPortTransport(port, "J1");
+        transport.setWriteListener(data -> {
+            for (Consumer<byte[]> listener : sendListeners) {
+                listener.accept(data);
+            }
+        });
         startReader(port, transport);
 
         // Let the plugin check that an X4 is on it. Any failure from the
@@ -149,6 +157,16 @@ public class X4Connection implements AutoCloseable {
 
     public void removeReceiveListener(Consumer<byte[]> listener) {
         receiveListeners.remove(listener);
+    }
+
+    /**
+     * Registers a listener for everything sent on J1, exactly as sent. It
+     * is called on whichever thread is sending, so a Swing listener must
+     * hand the bytes to the EDT itself. Add it before {@link #connect} to
+     * be told of the handshake too.
+     */
+    public void addSendListener(Consumer<byte[]> listener) {
+        sendListeners.add(Objects.requireNonNull(listener, "listener"));
     }
 
     /**

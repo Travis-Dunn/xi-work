@@ -47,6 +47,25 @@ public class TwoTabs {
         SwingUtilities.invokeAndWait(() -> { try { ((JSpinner) Harness.get(cp, "dpfSpinner")).setValue(dpf); } catch (Exception e) { throw new RuntimeException(e); } });
         Harness.clickConfigure(cp);
     }
+    /* Runs something while noting each text the activity indicator shows. */
+    interface Step { void run() throws Exception; }
+    static java.util.List<String> watch(JFrame frame, Step step) throws Exception {
+        JLabel label = (JLabel) Harness.get(Harness.get(frame, "activityBar"), "label");
+        java.util.List<String> seen = Collections.synchronizedList(new ArrayList<>());
+        boolean[] stop = {false};
+        Thread t = new Thread(() -> {
+            String last = null;
+            while (!stop[0]) {
+                String now = label.getText();
+                if (!now.equals(last)) { seen.add(now); last = now; }
+                try { Thread.sleep(5); } catch (InterruptedException e) { return; }
+            }
+        });
+        t.start();
+        step.run();
+        stop[0] = true; t.join();
+        return seen;
+    }
     public static void main(String[] a) throws Exception {
         com.imet.App.main(new String[0]);
         JFrame frame = null;
@@ -70,19 +89,33 @@ public class TwoTabs {
         System.out.println(state("after both connect, tab 1", t[0]));
         System.out.println(state("after both connect, tab 2", t[1]));
 
-        configure(t[0], 2.0);
+        // The activity indicator: off until manufacturing features are on.
+        JPanel bar = (JPanel) Harness.get(fr, "activityBar");
+        System.out.println("HARNESS activity bar visible before=" + bar.isVisible());
+        SwingUtilities.invokeAndWait(() -> { try {
+            java.lang.reflect.Field m = fr.getClass().getDeclaredField("manufacturingEnabled"); m.setAccessible(true); m.set(fr, true);
+            Harness.call(fr, "onManufacturingToggled");
+            pane.setSelectedComponent(t[0]);
+        } catch (Exception e) { throw new RuntimeException(e); } });
+        System.out.println("HARNESS activity bar visible with manufacturing on=" + bar.isVisible());
+
+        System.out.println("HARNESS activity, tab 1 selected, tab 1 configuring: " + watch(fr, () -> configure(t[0], 2.0)));
+        Harness.shot(fr.getContentPane(), new java.io.File(a[0]).getParent() + "/two-activity.png");
         System.out.println(state("after tab 1 set 2 Hz, tab 1", t[0]));
-        configure(t[1], 0.5);
+        System.out.println("HARNESS activity, tab 1 selected, tab 2 configuring: " + watch(fr, () -> configure(t[1], 0.5)));
         System.out.println(state("after tab 2 set 0.5 Hz, tab 2", t[1]));
+        System.out.println("HARNESS activity, switching to tab 2: " + watch(fr, () -> {
+            SwingUtilities.invokeAndWait(() -> pane.setSelectedComponent(t[1])); Thread.sleep(3000); }));
 
         // Disconnect tab 2; tab 1 must still reach its X4.
         Object hw2 = hw(t[1]);
         SwingUtilities.invokeAndWait(() -> { try { Harness.call(hw2, "onJ1Connect"); } catch (Exception e) { throw new RuntimeException(e); } });
+        System.out.println("HARNESS activity, tab 2 selected and disconnected: " + watch(fr, () -> Thread.sleep(300)));
         configure(t[0], 1.0);
         System.out.println(state("after tab 2 disconnected and tab 1 set 1 Hz, tab 1", t[0]));
 
         // Reconnect tab 2, then close it with its x: its port must be released.
-        connect(t[1], a[1]);
+        System.out.println("HARNESS activity, tab 2 selected and connecting: " + watch(fr, () -> connect(t[1], a[1])));
         Object conn2 = Harness.get(hw2, "j1Connection");
         Method isConnected = conn2.getClass().getMethod("isConnected");
         System.out.println("HARNESS tab 2 reconnected: port open=" + isConnected.invoke(conn2));

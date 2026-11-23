@@ -127,6 +127,17 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
         this.j3ConnectionListener = listener;
     }
 
+    /**
+     * Optional callback told everything this tab sends to its device, on
+     * the sending thread, from the first byte of connecting.  Used for
+     * the activity indicator.
+     */
+    private Consumer<byte[]> sendListener;
+
+    public void setSendListener(Consumer<byte[]> listener) {
+        this.sendListener = listener;
+    }
+
     /** Returns the J3 connection if one is open, otherwise {@code null}. */
     public J3Connection getJ3Connection() {
         return j3Connected ? j3Connection : null;
@@ -712,6 +723,9 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
             @Override
             protected Void doInBackground() {
                 X4Connection connection = new X4Connection(plugin);
+                if (sendListener != null) {
+                    connection.addSendListener(sendListener);
+                }
                 try {
                     connection.connect(selectedPort);
 

@@ -194,6 +194,13 @@ skipping streamed data lines.
   - This also explains the reply latency in open item 1: a 500 ms timeout
     is shorter than a cycle.
   - `tools/fake_x4.py` behaves this way by default (`--busy`).
+- **Activity indicator** (not in the SoW; my request, 2026-11-23): a
+  line along the bottom of the window, shown only while manufacturing
+  features are enabled. It shows what the selected tab last sent on J1:
+  "Sending /DPF?" for 2.5 s after each send, then "Idle. Last sent /DPF?
+  at 14:03:22" in grey; blank when the tab isn't connected. The bytes
+  come from `X4Connection.addSendListener`, attached before connecting so
+  the handshake shows too (`ActivityBar`, `TabContentPanel.getLastSent`).
 - **Console:** every J1 op, raw byte, reply and plugin decision is logged with
   timestamps. The lines don't say which tab they are from. The console
   test menu (stdin) is OFF but kept: `CONSOLE_TEST_ENABLED` in `MainFrame`.

@@ -1,6 +1,8 @@
 #!/bin/sh
 # Runs the real app against two fake X4s, one per tab, and prints what
-# each tab shows, then which commands each fake received. Linux only;
+# each tab shows, then which commands each fake received. It also turns
+# manufacturing features on and prints what the activity indicator shows
+# (screenshot: out/two-activity.png). Linux only;
 # needs Xvfb. Build first: mvn clean package (from the repo root).
 #
 #   tools/harness/two.sh
