@@ -1,11 +1,12 @@
-# Handoff: iMet-XI / X4 work (as of 2026-11-12)
+# Handoff: iMet-XI / X4 work (as of 2026-11-23)
 
 ## Who and what
 
 I'm a contractor for InterMet Systems (the client), working on **iMet-XI**, a
 Java/Swing rewrite of the client's iMet-XS app (XS source is lost). XI
 configures and reads data from InterMet's X-series devices (X4 first, then
-XQ2, maybe XF) through device plugins. Work is governed by SoW 205196 Rev 03.
+XQ2, maybe XF) through device plugins. Work is governed by SoW 205196 Rev 05
+(Rev 04 added the XQ2, #40–#56; Rev 05 defined #22).
 The X4 manual is 252100.0200 Rev 12. Ask me for either PDF if it's not
 attached.
 
@@ -20,9 +21,9 @@ when work drifts into pluginBase/framework territory.
 
 ## Repos
 
-- **`Travis-Dunn/xi-work`**: the single multi-module Maven repo. Current work
-  is on branch `claude/clever-goodall-ae4od5`, 11 commits ahead of `master`.
-  No PR has been opened.
+- **`Travis-Dunn/xi-work`**: the single multi-module Maven repo. Work is
+  merged to `master` by pull request; check that the last session's branch
+  was merged before starting (one was left unmerged once).
 - `Travis-Dunn/xi` and `Travis-Dunn/X4-Plugin`: old repos, superseded. Their
   work (branch `plugin-transport-ack`) was carried into xi-work.
 - `InterMet-Systems/iMet-XI`: the client's repo; Claude can't reach it. I work
@@ -122,6 +123,25 @@ skipping streamed data lines.
   - A port showing "Other (left unchanged)" is not written.
   - Board data is always `/CBD=0,0` (SoW #16), so a device on the factory
     `0,30720` gains the four battery columns the first time.
+- **Restore Data Defaults (#22):** asks first, then writes
+  `X4Settings.dataDefaults(...)` through the same `configure` as Configure
+  X4: J3 at 115200, J4–J9 to no sensor, DPF 1, `/CBD=0,0`, TDP on. The
+  serial number and pressure bias are passed in as the X4 holds them, so
+  they are never sent. It is the one thing on the screen that writes
+  without Configure X4 (my reading of #22 against #26), hence the
+  confirmation.
+- **Load from File, Save to File (#24, #25):** `X4SettingsFile`. The
+  format is ours: `name=value` lines, described in that class. They read
+  and fill the screen only; nothing reaches the X4 until Configure X4.
+  - Save writes the screen, not the X4, and refuses a screen with a
+    mistake on it. A port showing "Other (left unchanged)" is left out.
+  - Load leaves alone any setting the file leaves out, and changes
+    nothing if the file has a mistake (reported with its line number) or
+    names a sensor the screen doesn't offer on that port.
+  - A file carries its X4's serial number and pressure bias, so it works
+    as a backup. Loaded onto a different X4, the status line warns in
+    orange that Configure X4 will replace that X4's. To share a setup
+    without them, delete those two lines from the file.
 - **How the X4 handles commands** (worked out from real-X4 logs,
   2026-11-12; not from the manual):
   - While publishing, the X4 acts on commands once per publishing cycle,
@@ -180,9 +200,9 @@ I checked the layout against XS on Windows; it looks good.
 | 15 X4 image | Done. |
 | 16 Sensor options and fields | Done, except the TCal "Load from File" button (disabled; file format unknown). |
 | 17–21 Serial, frequency, bias, J3 baud, data toggle | Read and write done. |
-| 22 Restore Defaults | Button disabled; TBD in the SoW. |
+| 22 Restore Data Defaults | Done per Rev 05, with the info bubble. Tested on the fake X4 only. |
 | 23 Fetch | Not implemented, as the SoW says. |
-| 24, 25 Load from File, Save to File | Buttons disabled; TBD in the SoW. |
+| 24, 25 Load from File, Save to File | Done; the client left the file format to us. |
 | 26 Configure X4 | Done. Two real-X4 tries lost `/DPF=` because another command followed it too closely; the paced version is not yet tried on a real X4. |
 
 ## Open items, most pressing first
@@ -254,6 +274,7 @@ I checked the layout against XS on Windows; it looks good.
       its data format changes.
     - `tools/harness/run.sh`: runs the real app against the fake under
       Xvfb, drives the panels through reflection, and prints what they show.
+      `FILES=1` and `RESTORE=1` cover #22, #24 and #25.
 
     Gotchas:
     - Run GUI harnesses with the distribution folder as the working
@@ -265,6 +286,7 @@ I checked the layout against XS on Windows; it looks good.
 
 1. Card buttons (#35, #36).
 2. Try J3 on a real X4 with the J3-to-USB cable.
+3. Try Configure X4 (paced) and Restore Data Defaults on a real X4.
 4. Waiting on the client: the TCal "Load from File" (needs a sample
-   calibration file), and Restore Defaults, Load from File and Save to File
-   (#22, #24, #25, TBD in the SoW). Their buttons are shown but disabled.
+   calibration file; SoW #50 names one for the XQ2, `112804_AT.txt`).
+5. XQ2 (#40–#56), new in Rev 04.
