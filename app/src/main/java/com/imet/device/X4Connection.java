@@ -6,6 +6,7 @@ import jssc.SerialPort;
 import jssc.SerialPortException;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -222,6 +223,66 @@ public class X4Connection implements AutoCloseable {
             Console.log("X4 does not hold: " + String.join(", ", refused));
         }
         return refused;
+    }
+
+    // ── The microSD card (SoW #35, #36) ─────────────────────────────────────
+
+    /** How an {@link #eraseCard} went. */
+    public enum CardErase {
+        /** The X4 said the erase is complete. */
+        ERASED,
+        /** The X4 said no card is detected. */
+        NO_CARD,
+        /** The X4 said neither in time. */
+        NO_REPLY
+    }
+
+    /**
+     * Erases the log on the X4's microSD card (SoW #35) and waits for the
+     * X4 to say how it went, so don't call it on the EDT. Never throws.
+     */
+    public CardErase eraseCard() {
+        Console.log("J1 erasing the card");
+        byte[] answer = plugin.messageType_q(ascii("eraseSDCardData"));
+        String text = (answer == null) ? "" : new String(answer, StandardCharsets.US_ASCII);
+        CardErase result = text.equals("1") ? CardErase.ERASED
+                : text.equals("0") ? CardErase.NO_CARD : CardErase.NO_REPLY;
+        Console.log("J1 card erase: " + result);
+        return result;
+    }
+
+    /**
+     * Asks the X4 how much is in the log on its microSD card. May take a
+     * couple of seconds, so don't call it on the EDT. Never throws.
+     *
+     * @return the size in bytes; -1 if the X4 detects no card; or
+     *         {@code null} if the X4 gave no answer that can be read
+     */
+    public Long cardDataSize() {
+        byte[] answer = plugin.messageType_q(ascii("sdCardDataSize"));
+        if (answer == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(new String(answer, StandardCharsets.US_ASCII).trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Has the X4 send the log on its microSD card (SoW #36). It arrives
+     * on J1 in place of data lines, so a receive listener gets it; see
+     * {@link CardDownload}. Returns once the request is sent. Never
+     * throws.
+     */
+    public void startCardData() {
+        Console.log("J1 asking for the card's data");
+        plugin.messageType_c(ascii("getSDCardData"));
+    }
+
+    private static byte[] ascii(String s) {
+        return s.getBytes(StandardCharsets.US_ASCII);
     }
 
     /**
