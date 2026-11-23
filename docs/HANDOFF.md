@@ -142,6 +142,8 @@ skipping streamed data lines.
     as a backup. Loaded onto a different X4, the status line warns in
     orange that Configure X4 will replace that X4's. To share a setup
     without them, delete those two lines from the file.
+- **Calibration files:** `ThermistorCalibration` is not X4-specific; the
+  XQ2's "Load Coefficients From File" (#50) names the same file.
 - **How the X4 handles commands** (worked out from real-X4 logs,
   2026-11-12; not from the manual):
   - While publishing, the X4 acts on commands once per publishing cycle,
@@ -198,7 +200,7 @@ I checked the layout against XS on Windows; it looks good.
 |---|---|
 | 14 Poll at connect | Done. |
 | 15 X4 image | Done. |
-| 16 Sensor options and fields | Done, except the TCal "Load from File" button (disabled; file format unknown). |
+| 16 Sensor options and fields | Done. A temperature sensor's "Load from File" reads InterMet's calibration file (`ThermistorCalibration`: serial number, then four coefficients, one per line; e.g. `112804_AT.tcal`). |
 | 17–21 Serial, frequency, bias, J3 baud, data toggle | Read and write done. |
 | 22 Restore Data Defaults | Done per Rev 05, with the info bubble. Tested on the fake X4 only. |
 | 23 Fetch | Not implemented, as the SoW says. |
@@ -274,7 +276,8 @@ I checked the layout against XS on Windows; it looks good.
       its data format changes.
     - `tools/harness/run.sh`: runs the real app against the fake under
       Xvfb, drives the panels through reflection, and prints what they show.
-      `FILES=1` and `RESTORE=1` cover #22, #24 and #25.
+      `FILES=1` and `RESTORE=1` cover #22, #24 and #25; `CAL=<file>` loads
+      a calibration file.
 
     Gotchas:
     - Run GUI harnesses with the distribution folder as the working
@@ -287,6 +290,4 @@ I checked the layout against XS on Windows; it looks good.
 1. Card buttons (#35, #36).
 2. Try J3 on a real X4 with the J3-to-USB cable.
 3. Try Configure X4 (paced) and Restore Data Defaults on a real X4.
-4. Waiting on the client: the TCal "Load from File" (needs a sample
-   calibration file; SoW #50 names one for the XQ2, `112804_AT.txt`).
-5. XQ2 (#40–#56), new in Rev 04.
+4. XQ2 (#40–#56), new in Rev 04.

@@ -114,12 +114,34 @@ public class Harness {
         sb.append(" status=[").append(((JLabel) get(cp, "statusLabel")).getText()).append("]");
         return sb.toString();
     }
+    /* The last button with this text: a temperature sensor's row has a
+       "Load from File" of its own, above the one in the button bar. */
     static JButton button(Container c, String text) {
+        JButton last = null;
         for (Component x : c.getComponents()) {
-            if (x instanceof JButton b && text.equals(b.getText()) && b.isEnabled()) return b;   // a sensor row has its own, disabled, "Load from File"
-            if (x instanceof Container cc) { JButton b = button(cc, text); if (b != null) return b; }
+            if (x instanceof JButton b && text.equals(b.getText())) last = b;
+            if (x instanceof Container cc) { JButton b = button(cc, text); if (b != null) last = b; }
         }
-        return null;
+        return last;
+    }
+    /* CAL=<file>: load a calibration file into J8's temperature sensor,
+       then a file that isn't one. */
+    static void calibration(Object cp, String calFile, String out, String tag) throws Exception {
+        SwingUtilities.invokeAndWait(() -> { try { pick(cp, 8, "10085B iMet-X4 Temperature Sensor"); } catch (Exception e) { throw new RuntimeException(e); } });
+        JButton load = button((Container) ((Map<?, ?>) get(cp, "sensorAreas")).get(8), "Load from File");
+        clickAndChoose(load, new java.io.File(calFile));
+        StringBuilder sb = new StringBuilder("serial=" + field(sensor(cp, 8), "atSerial").getText());
+        for (JTextField f : tcal(sensor(cp, 8))) sb.append(" ").append(f.getText());
+        System.out.println("HARNESS calibration J8 " + sb + " status=[" + ((JLabel) get(cp, "statusLabel")).getText() + "]");
+        java.io.File bad = new java.io.File(out, tag + "-bad.tcal");
+        java.nio.file.Files.writeString(bad.toPath(), "112804\n1\n2\n");
+        clickAndChoose(load, bad);
+        System.out.println("HARNESS calibration bad serial=" + field(sensor(cp, 8), "atSerial").getText() + " status=[" + ((JLabel) get(cp, "statusLabel")).getText() + "]");
+        clickAndChoose(load, new java.io.File(calFile));
+        clickConfigure(cp);
+        sb = new StringBuilder("serial=" + field(sensor(cp, 8), "atSerial").getText());
+        for (JTextField f : tcal(sensor(cp, 8))) sb.append(" ").append(f.getText());
+        System.out.println("HARNESS calibration configured J8 " + sb);
     }
     static <T> T inDialog(Class<T> k) throws Exception {
         for (int i = 0; i < 50; i++) {
@@ -297,6 +319,7 @@ public class Harness {
             System.out.println("HARNESS config " + sb);
             if (System.getenv("CONFIGURE") != null) configure(hw, cp, frame, out, tag);
             if (System.getenv("FILES") != null) files(cp, out, tag);
+            if (System.getenv("CAL") != null) calibration(cp, System.getenv("CAL"), out, tag);
             if (System.getenv("RESTORE") != null) restore(hw, cp, frame, out, tag);
             if (j3Port != null) { System.out.println("HARNESS J3 after configure connected=" + get(hw, "j3Connected") + " baud menu=" + ((JComboBox<?>) get(hw, "j3BaudCombo")).getSelectedItem()); dialogs(); }
             // The user edits a field, leaves the screen, and comes back: it must survive.

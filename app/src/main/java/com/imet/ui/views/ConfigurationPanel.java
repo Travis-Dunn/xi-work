@@ -1,5 +1,6 @@
 package com.imet.ui.views;
 
+import com.imet.device.ThermistorCalibration;
 import com.imet.device.X4Connection;
 import com.imet.device.X4Settings;
 import com.imet.device.X4SettingsFile;
@@ -127,6 +128,9 @@ public class ConfigurationPanel extends JPanel {
 
     /** For Load from File and Save to File; kept so it reopens where it was. */
     private JFileChooser fileChooser;
+
+    /** For a temperature sensor's calibration file; likewise kept. */
+    private JFileChooser calibrationChooser;
 
     /**
      * Told the device's settings after Configure X4 has written and read
@@ -578,6 +582,50 @@ public class ConfigurationPanel extends JPanel {
     }
 
     /**
+     * Fills in a temperature sensor's serial number and TCal values from
+     * its calibration file (#16).  Like the rest of the screen, nothing
+     * reaches the X4 until Configure X4 is clicked.
+     *
+     * @param port the port whose row the button is in
+     */
+    private void onLoadCalibration(int port) {
+        if (calibrationChooser == null) {
+            calibrationChooser = new JFileChooser();
+            calibrationChooser.setDialogTitle("Load Calibration File");
+            calibrationChooser.setFileFilter(
+                    new javax.swing.filechooser.FileNameExtensionFilter(
+                            "Calibration files (*.tcal, *.txt)", "tcal", "txt"));
+        }
+        if (calibrationChooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        Path file = calibrationChooser.getSelectedFile().toPath();
+        String name = file.getFileName().toString();
+
+        ThermistorCalibration calibration;
+        try {
+            calibration = ThermistorCalibration.load(file);
+        } catch (ThermistorCalibration.FormatException e) {
+            showError(name + " was not loaded. " + e.getMessage());
+            return;
+        } catch (IOException e) {
+            showError("Could not read " + name + ": " + reason(e));
+            return;
+        }
+
+        SensorFields fields = sensorFields.get(port);
+        fields.atSerial().setText(calibration.serialNumber());
+        for (int i = 0; i < 4; i++) {
+            fields.tcal()[i].setText(calibration.coefficients().get(i));
+            fields.tcal()[i].setCaretPosition(0);
+        }
+        clearErrorMarks();
+        statusLabel.setText("Loaded " + name + " for J" + port
+                + ". Click Configure X4 to write it to the X4.");
+        statusLabel.setForeground(STATUS_GREY);
+    }
+
+    /**
      * Asks for the file to save to or load from.
      *
      * @param saving        whether the file is to be written
@@ -926,15 +974,15 @@ public class ConfigurationPanel extends JPanel {
             for (int i = 0; i < 4; i++) {
                 area.add(createFieldColumn("TCal" + (i + 1), fields.tcal()[i]));
             }
-            // Reads the sensor's calibration file. Waiting on a sample of
-            // the file to know its format.
+            // Fills these five fields from the sensor's calibration file.
             JButton load = createStyledButton("Load from File");
-            load.setEnabled(false);
-            load.setToolTipText("Not available yet");
+            load.addActionListener(e -> onLoadCalibration(port));
             area.add(createFieldColumn(" ", load));
             area.add(createFieldColumn(" ", createInfoIcon(
                     "The AT serial number and TCal values come from the "
-                            + "temperature sensor's calibration file.")));
+                            + "temperature sensor's calibration file "
+                            + "(for example 112804_AT.tcal). Load from File "
+                            + "fills them in.")));
         } else if (HUMIDITY.equals(sensor)) {
             area.add(createFieldColumn("I2C Address", fields.i2c()));
             area.add(createFieldColumn(" ", createInfoIcon(
