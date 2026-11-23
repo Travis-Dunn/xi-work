@@ -125,6 +125,11 @@ public class TabContentPanel extends JPanel {
         bodyPanel.repaint();
     }
 
+    /** Called when this tab is closed: disconnects its device. */
+    public void close() {
+        hardwarePanel.close();
+    }
+
     /** Switch the visible view by name. */
     public void showView(String viewName) {
         cardLayout.show(bodyPanel, viewName);

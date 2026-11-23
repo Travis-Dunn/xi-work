@@ -132,6 +132,12 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
         return j3Connected ? j3Connection : null;
     }
 
+    /** The port scanner shared by every tab. */
+    private final DeviceScanner scanner;
+
+    /** True once this panel's tab has been closed. */
+    private boolean closed;
+
     public HardwarePanel(DeviceScanner scanner) {
         setLayout(new BorderLayout());
         setBackground(BACKGROUND);
@@ -268,7 +274,22 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
 
         add(wrapper, BorderLayout.CENTER);
 
+        this.scanner = scanner;
         scanner.addListener(this);
+    }
+
+    /**
+     * Called when this panel's tab is closed: disconnects J3 and J1, so
+     * their ports are free for another tab or another program.  Without
+     * this a closed tab would keep its ports open, with nothing left on
+     * screen to disconnect them.
+     */
+    public void close() {
+        closed = true;
+        if (j1Connected) {
+            onJ1Connect(); // the Disconnect path; takes J3 down first
+        }
+        scanner.removeListener(this);
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -667,7 +688,9 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
             return;
         }
 
-        PluginTest plugin = Loader.GetPluginX4();
+        // A plugin object of this connection's own: one talks to one X4,
+        // and another tab may be connected to another.
+        PluginTest plugin = Loader.NewPluginX4();
         if (plugin == null) {
             showErrorNotice("The X4 plugin is not loaded.");
             return;
@@ -712,6 +735,13 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
 
             @Override
             protected void done() {
+                if (closed) {
+                    // The tab was closed while connecting.
+                    if (openedConnection != null) {
+                        openedConnection.disconnect();
+                    }
+                    return;
+                }
                 if (errorMessage != null) {
                     // ── Connection failed ──
                     j1ConnectButton.setText("Connect");

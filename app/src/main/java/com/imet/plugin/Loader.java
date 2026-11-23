@@ -31,6 +31,10 @@ public class Loader {
 
     private static PluginTest pluginX4 = null;
 
+    /* The X4 plugin's class, kept so that each connection can have a
+       plugin object of its own; see NewPluginX4(). */
+    private static Class<?> pluginClassX4 = null;
+
     private static Path pluginsPath;
     private static Path lexiconsPath;
     private static final Map<String, PluginTest> pluginsMap = new HashMap<>();
@@ -208,6 +212,7 @@ public class Loader {
             clas = loader.loadClass("com.imet.plugin." +
                     "PluginTestExample");
             plugin = (PluginTest) clas.getDeclaredConstructor().newInstance();
+            pluginClassX4 = clas;
         } catch (InvocationTargetException e) {
             /* TODO: add logging */
             CloseLoader(loader);
@@ -379,6 +384,7 @@ public class Loader {
     private static void ClearX4() {
         lexiconX4 = null;
         pluginX4 = null;
+        pluginClassX4 = null;
     }
 
     private static void CloseLoader(URLClassLoader l) {
@@ -390,7 +396,26 @@ public class Loader {
     }
 
     public static LexiconTest GetLexiconX4() { return lexiconX4; }
+    /* The plugin object made when the plugin was loaded. It says that the
+       plugin is available; it is not connected to any device. */
     public static PluginTest GetPluginX4() { return pluginX4; }
+
+    /* A new X4 plugin object, for one connection to one X4. A plugin
+       object talks to a single device (it holds that device's
+       transport), so every connection needs its own: sharing one between
+       two tabs sent both tabs' commands to whichever X4 connected last.
+       Returns null if the plugin isn't loaded or can't be created. */
+    public static PluginTest NewPluginX4() {
+        if (pluginClassX4 == null) {
+            return null;
+        }
+        try {
+            return (PluginTest) pluginClassX4.getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException | ClassCastException e) {
+            Console.println(UnexpectedExceptionMsg(e));
+            return null;
+        }
+    }
 
     static String PluginsDirSetSys(String s) {
         return String.format("XI running in installed mode. Plugin directory" +

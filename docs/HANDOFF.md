@@ -58,6 +58,14 @@ when work drifts into pluginBase/framework territory.
   `imet.home` property, then jpackage's `app.dir`, then `user.dir`.
 - `Loader` loads the lexicon, then the jar it names. The class name
   `com.imet.plugin.PluginTestExample` is hardcoded.
+- **Tabs:** each tab is its own device. Every J1 connection gets a plugin
+  object of its own (`Loader.NewPluginX4()`): a plugin object holds one
+  device's transport, and when the tabs shared one, both tabs' commands
+  went to whichever X4 connected last. `Loader.GetPluginX4()` now only
+  says the plugin is available. Closing a tab disconnects its J1 and J3.
+  A new tab is told which lexicons and plugins the scanner has already
+  found (before, a second tab reported them all missing and refused to
+  select a product). `tools/harness/two.sh` runs two fake X4s in two tabs.
 
 ## Architecture (agreed)
 
@@ -187,8 +195,10 @@ skipping streamed data lines.
     is shorter than a cycle.
   - `tools/fake_x4.py` behaves this way by default (`--busy`).
 - **Console:** every J1 op, raw byte, reply and plugin decision is logged with
-  timestamps. The console test menu (stdin) is ON: `CONSOLE_TEST_ENABLED` in
-  `MainFrame`. It exercises plugin messages over the GUI's J1 connection.
+  timestamps. The lines don't say which tab they are from. The console
+  test menu (stdin) is OFF but kept: `CONSOLE_TEST_ENABLED` in `MainFrame`.
+  Before turning it on, give it a connection's plugin (see the comment
+  there); the object it uses now is not connected to anything.
 
 ## Commits on the branch (oldest first)
 
@@ -321,7 +331,7 @@ I checked the layout against XS on Windows; it looks good.
 1. A session on a real X4: Configure X4 (paced), Restore Data Defaults,
    Erase Card, Get from Card (compare the saved file with the card's
    log.dat), and J3 with the J3-to-USB cable.
-2. Before release: turn off `CONSOLE_TEST_ENABLED`; settle the frequency
-   limit (open item 2); connection-state errors (open items 6, 7).
+2. Before release: settle the frequency limit (open item 2);
+   connection-state errors (open items 6, 7).
 3. Tell the client about the lexicon changes in 0.3.0.
 4. XQ2 (#40–#56), new in Rev 04.

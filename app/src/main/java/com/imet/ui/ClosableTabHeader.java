@@ -34,6 +34,10 @@ public class ClosableTabHeader extends JPanel {
                 if (contentTabCount > 1) {
                     // Suppress the "+" tab ChangeListener while removing.
                     tabbedPane.putClientProperty("suppressNewTab", Boolean.TRUE);
+                    // Free the tab's ports before it goes.
+                    if (tabbedPane.getComponentAt(index) instanceof TabContentPanel tab) {
+                        tab.close();
+                    }
                     tabbedPane.removeTabAt(index);
                     tabbedPane.putClientProperty("suppressNewTab", Boolean.FALSE);
                 }

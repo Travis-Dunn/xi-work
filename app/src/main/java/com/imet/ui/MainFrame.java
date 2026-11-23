@@ -56,9 +56,13 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
     private static final String ERR_STR_PLUGIN_DIR =
             "Unable to find plugin directory.";
 
-    /* TEMP: the console test sends plugin messages over the J1 connection
-       opened in the GUI. Set to false to keep it from reading stdin. */
-    private static final boolean CONSOLE_TEST_ENABLED = true;
+    /* TEMP: the console test sends plugin messages from stdin. Off; set
+       to true to use it again. It uses Loader.GetPluginX4(), which used
+       to be the plugin object the GUI's J1 connection used. Each
+       connection now has a plugin object of its own (see
+       Loader.NewPluginX4), so before turning this on, give tempCliTest
+       the plugin of the connection to test (X4Connection.getPlugin()). */
+    private static final boolean CONSOLE_TEST_ENABLED = false;
 
     public MainFrame() {
         super(AppInfo.WINDOW_TITLE);
@@ -432,15 +436,26 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
     @Override
     public void onResourcesChanged(Set<String> lexiconDevices,
                                    Set<String> pluginDevices) {
+        // Kept for tabs opened later: the scanner only reports changes.
+        knownLexiconDevices = lexiconDevices;
+        knownPluginDevices = pluginDevices;
         for (int i = 0; i < tabbedPane.getTabCount(); i++) {
             Component comp = tabbedPane.getComponentAt(i);
             if (comp instanceof TabContentPanel tcp) {
-                HardwarePanel hp = tcp.GetHardwarePanel();
-                for (String product : ALL_PRODUCTS) {
-                    hp.setLexiconAvailable(product, lexiconDevices.contains(product));
-                    hp.setPluginAvailable(product, pluginDevices.contains(product));
-                }
+                showResources(tcp.GetHardwarePanel());
             }
+        }
+    }
+
+    /** The lexicons and plugins found by the last scan, by product. */
+    private Set<String> knownLexiconDevices = Set.of();
+    private Set<String> knownPluginDevices = Set.of();
+
+    /** Tells a tab's Hardware screen which products can be used. */
+    private void showResources(HardwarePanel hp) {
+        for (String product : ALL_PRODUCTS) {
+            hp.setLexiconAvailable(product, knownLexiconDevices.contains(product));
+            hp.setPluginAvailable(product, knownPluginDevices.contains(product));
         }
     }
 
@@ -452,6 +467,9 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
         tabCounter++;
         String title = (tabCounter == 1) ? "New Tab" : "New Tab " + tabCounter;
         TabContentPanel content = new TabContentPanel(deviceScanner);
+        // A new tab has to be told what the scanner already found, or it
+        // takes every product's lexicon and plugin to be missing.
+        showResources(content.GetHardwarePanel());
         tabbedPane.addTab(title, content);
 
         int index = tabbedPane.indexOfComponent(content);
