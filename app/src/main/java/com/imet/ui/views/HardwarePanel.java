@@ -3,6 +3,7 @@ package com.imet.ui.views;
 import com.imet.Console;
 import com.imet.device.J3Connection;
 import com.imet.device.X4Connection;
+import com.imet.device.X4Settings;
 import com.imet.plugin.Loader;
 import com.imet.plugin.PluginTest;
 import java.util.function.Consumer;
@@ -14,7 +15,6 @@ import javax.swing.*;
 import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
 import java.awt.*;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -114,6 +114,22 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
 
     public void setConnectionListener(Consumer<X4Connection> listener) {
         this.connectionListener = listener;
+    }
+
+    /**
+     * Optional callback fired when the J3 connection is established or
+     * dropped: the live {@link J3Connection} on connect, {@code null} on
+     * disconnect.  Used to feed the Data screen's J3 terminal.
+     */
+    private Consumer<J3Connection> j3ConnectionListener;
+
+    public void setJ3ConnectionListener(Consumer<J3Connection> listener) {
+        this.j3ConnectionListener = listener;
+    }
+
+    /** Returns the J3 connection if one is open, otherwise {@code null}. */
+    public J3Connection getJ3Connection() {
+        return j3Connected ? j3Connection : null;
     }
 
     public HardwarePanel(DeviceScanner scanner) {
@@ -616,11 +632,11 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
      * Handles the J1 Connect / Disconnect button.
      * <p>
      * On <b>Connect</b>: validates the selected port, opens it at
-     * 115200 baud 8-N-1, and has the X4 plugin verify the device
-     * (it sends {@code /ACK?}).  Runs on a background thread to avoid
-     * blocking the EDT.
-     * On success the J3 row is enabled; on failure an error dialog
-     * is shown.
+     * 115200 baud 8-N-1, has the X4 plugin verify the device
+     * (it sends {@code /ACK?}), and then reads the device's settings
+     * (SoW #14).  Runs on a background thread to avoid blocking the EDT.
+     * On success the J3 row is enabled and its baud rate is set to the
+     * device's; on failure an error dialog is shown.
      * <p>
      * On <b>Disconnect</b>: closes the port and resets the UI.
      */
@@ -667,17 +683,8 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
             /** The open connection; only set if every step succeeded. */
             private X4Connection openedConnection;
 
-            /**
-             * The J3 baud rate reported by the device, e.g. {@code "115200"}.
-             * {@code null} if the query failed or the rate isn't supported.
-             */
-            private String queriedJ3Baud;
-
-            /**
-             * Set when the device returns a J3 baud rate that is not in the
-             * supported list, so we can show a targeted warning in {@link #done()}.
-             */
-            private String unrecognizedJ3Baud;
+            /** The device's settings, read right after connecting (#14). */
+            private X4Settings settings;
 
             @Override
             protected Void doInBackground() {
@@ -685,44 +692,18 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
                 try {
                     connection.connect(selectedPort);
 
-                    // ── Query J3 baud rate ──────────────────────────────────
-                    // The plugin polls /CJ3? and skips streamed data lines.
-                    byte[] reply = plugin.messageType_q(
-                            "j3BaudRate".getBytes(StandardCharsets.US_ASCII));
-                    if (reply != null) {
-                        String candidate = new String(reply,
-                                StandardCharsets.US_ASCII).trim();
-                        boolean supported = false;
-                        for (String rate : J3_BAUD_RATES) {
-                            if (rate.equals(candidate)) {
-                                supported = true;
-                                break;
-                            }
-                        }
-                        if (supported) {
-                            queriedJ3Baud = candidate;
-                        } else {
-                            unrecognizedJ3Baud = candidate;
-                        }
-                    }
-                    // With no reply we leave both fields null and warn the
-                    // user in done().
-                    if (queriedJ3Baud != null) {
-                        Console.log("J3 baud from j3BaudRate: " + queriedJ3Baud);
-                    } else if (unrecognizedJ3Baud != null) {
-                        Console.log("J3 baud from j3BaudRate: unrecognized "
-                                + Console.escape(unrecognizedJ3Baud));
-                    } else {
-                        Console.log("J3 baud from j3BaudRate: no reply");
-                    }
+                    // Read every setting once, here. The Configuration and
+                    // Data screens use this same read; the J3 baud rate
+                    // below comes from it too.
+                    settings = connection.readSettings();
 
                     openedConnection = connection;
 
                 } catch (Exception e) {
                     Console.log("J1 connect failed: " + e);
-                    // The port may already be open (e.g. /CJ3? failed after
-                    // the handshake), so release it or the next attempt
-                    // finds the port busy.
+                    // The port may already be open (the handshake passed
+                    // but a later step failed), so release it or the next
+                    // attempt finds the port busy.
                     connection.disconnect();
                     errorMessage = e.getMessage();
                 }
@@ -751,25 +732,93 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
                     // connection is now available.
                     if (connectionListener != null) connectionListener.accept(j1Connection);
 
-                    // Apply the queried J3 baud rate, or warn if unavailable.
-                    if (queriedJ3Baud != null) {
-                        j3BaudCombo.setSelectedItem(queriedJ3Baud);
-                    } else if (unrecognizedJ3Baud != null) {
-                        showErrorNotice(
-                                "Device reported an unrecognized J3 baud rate: \""
-                                        + unrecognizedJ3Baud + "\".<br><br>"
-                                        + "Supported rates are: 9600, 19200, 38400, 57600, 115200.<br>"
-                                        + "Please select the correct rate manually before connecting J3.");
-                    } else {
-                        // No response to /CJ3? — warn but don't block the user.
-                        showErrorNotice(
-                                "Could not query the J3 baud rate from the device.<br><br>"
-                                        + "The default (115200) has been left selected. "
-                                        + "Please verify the baud rate before connecting J3.");
+                    // Set the J3 baud menu to the device's rate (#9), and
+                    // say so if that or any other setting wasn't read.
+                    String problem = applyJ3Baud(settings.j3BaudRate());
+                    String unread = describeUnread(settings);
+                    if (problem != null && unread != null) {
+                        showErrorNotice(problem + "<br><br>" + unread);
+                    } else if (problem != null) {
+                        showErrorNotice(problem);
+                    } else if (unread != null) {
+                        showErrorNotice(unread);
                     }
                 }
             }
         }.execute();
+    }
+
+    /**
+     * Selects the device's J3 baud rate in the J3 baud menu.
+     *
+     * @param baud the rate the device reported, or {@code null} if it
+     *             didn't answer
+     * @return {@code null} if the rate was applied, otherwise the error to
+     *         show the user
+     */
+    private String applyJ3Baud(String baud) {
+        if (baud == null) {
+            // No response to /CJ3? — warn but don't block the user.
+            return "Could not query the J3 baud rate from the device.<br><br>"
+                    + "The baud rate menu has been left as it was. "
+                    + "Please verify the baud rate before connecting J3.";
+        }
+        for (String rate : J3_BAUD_RATES) {
+            if (rate.equals(baud)) {
+                j3BaudCombo.setSelectedItem(rate);
+                return null;
+            }
+        }
+        return "Device reported an unrecognized J3 baud rate: \""
+                + baud + "\".<br><br>"
+                + "Supported rates are: 9600, 19200, 38400, 57600, 115200.<br>"
+                + "Please select the correct rate manually before connecting J3.";
+    }
+
+    /**
+     * @return the error to show for settings other than the J3 baud rate
+     *         that could not be read, or {@code null} if there are none
+     */
+    private static String describeUnread(X4Settings settings) {
+        java.util.List<String> unread = new java.util.ArrayList<>(settings.missing());
+        unread.remove("J3 Baud Rate"); // applyJ3Baud() reports this one
+        if (unread.isEmpty()) {
+            return null;
+        }
+        return "Could not read these settings from the device: "
+                + String.join(", ", unread) + ".<br><br>"
+                + "Disconnect and connect J1 again to retry.";
+    }
+
+    /**
+     * Called when the X4's settings have been read again (after Configure
+     * X4): the J3 baud menu follows the device.  If J3 is connected at a
+     * rate the device no longer uses, it is disconnected.
+     */
+    public void settingsChanged(X4Settings settings) {
+        String baud = settings.j3BaudRate();
+        if (baud == null) {
+            return;
+        }
+        if (j3Connected && !baud.equals(String.valueOf(j3Connection.getBaudRate()))) {
+            // The X4 restarted J3 at the new rate (manual 3.3.3); the open
+            // port would only show garbage from here on.
+            int oldBaud = j3Connection.getBaudRate();
+            forceDisconnectJ3();
+            applyJ3Baud(baud);
+            showErrorNotice("The X4's J3 baud rate changed from " + oldBaud + " to "
+                    + baud + ", so J3 was disconnected.<br><br>"
+                    + "Connect J3 again to use the new rate.");
+        } else if (!j3Connected) {
+            applyJ3Baud(baud);
+        }
+    }
+
+    /**
+     * Returns the J1 connection if one is open, otherwise {@code null}.
+     */
+    public X4Connection getJ1Connection() {
+        return j1Connected ? j1Connection : null;
     }
 
     /**
@@ -821,13 +870,14 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
         final int finalBaudRate = baudRate;
         new SwingWorker<Void, Void>() {
             private String errorMessage;
+            private J3Connection opened;
 
             @Override
             protected Void doInBackground() {
                 try {
                     J3Connection connection = new J3Connection();
                     connection.connect(selectedPort, finalBaudRate);
-                    j3Connection = connection;
+                    opened = connection;
                 } catch (Exception e) {
                     errorMessage = e.getMessage();
                 }
@@ -846,7 +896,18 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
                     showErrorNotice(errorMessage);
                 } else {
                     // ── Connection succeeded ──
+                    if (!j1Connected) {
+                        // J1 was disconnected while J3 was opening.
+                        opened.disconnect();
+                        j3ConnectButton.setText("Connect");
+                        j3ConnectButton.setBackground(BUTTON_COLOR);
+                        return;
+                    }
+                    j3Connection = opened;
                     j3Connected = true;
+                    if (j3ConnectionListener != null) {
+                        j3ConnectionListener.accept(j3Connection);
+                    }
                     j3ConnectButton.setText("Disconnect");
                     j3ConnectButton.setBackground(DETECTED_GREEN);
                     j3ConnectButton.setEnabled(true);
@@ -865,6 +926,9 @@ public class HardwarePanel extends JPanel implements DeviceScannerListener {
      */
     private void forceDisconnectJ3() {
         if (j3Connection != null) {
+            if (j3ConnectionListener != null) {
+                j3ConnectionListener.accept(null);
+            }
             j3Connection.disconnect();
             j3Connection = null;
         }

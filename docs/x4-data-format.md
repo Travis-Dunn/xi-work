@@ -103,18 +103,59 @@ from a temperature sensor on J8 or J9 (serial 78255, temperature 9999).
 Note the unpadded hour in `1:12:36` (and `17:31:0` in Figure 3-1):
 the device does not zero-pad, and #31 says to show it as sent.
 
+## What a real X4 does (captured 2026-11-12, `tools/CaptureHeader.java`)
+
+- **No header on J1.** Changing `/CBD` with TDP on changed the very next
+  data line (18 columns, then 22, then 18) with no header in between.
+  The header goes to the microSD card only, as the manual says; SoW #32's
+  "published on J1-J3" does not hold for this firmware.
+- **A pause after a format change.** Uptime jumped about 2.6 s across
+  each `/CBD` change, so the X4 publishes nothing for a moment.
+- **Replies share the stream.** `ACK`, `CBD=0,30720` and so on arrive
+  between data lines, on lines of their own.
+- **A value can come out short.** One line read `18:3:2` between
+  `18:3:24` and `18:3:27`. Shown as sent (#31).
+- **A NUL byte arrives when the port is opened.** The terminals drop NULs.
+- `/DPF?` answers with six decimals: `DPF=1.000000`.
+
+## How XI parses a line (`X4DataFormat`)
+
+1. Nothing is parsed until the settings have been read at connect (#27).
+   If any setting is missing, or `/CBD` can't be understood, nothing is
+   parsed and the Data screen says why in red.
+2. Split on the delimiter from `/CBD`, keeping empty values.
+3. The line must have exactly the number of columns the settings give:
+   the board columns the mask keeps, plus each port's sensor columns.
+   Anything else (a reply, a partial line, a different format) is not
+   data and is ignored.
+4. Header precaution (#32): also ignored are a line that is one value
+   followed by nothing but delimiters (the title row), and a line whose
+   uptime value is not a number (the column-name row).
+5. Values go to the fields untouched. A board column that is masked out
+   leaves its field empty (#30).
+6. After three lines in a row that aren't data, the fields are cleared
+   and the screen says the data doesn't match the settings, in red. That
+   is what happens if another program changes the X4's format.
+
+Assumptions and limits:
+
+- A sensor's own bitmask is taken to be 0, which is all XI writes
+  (SoW #16). A device with a non-zero port mask has fewer columns than
+  expected, so it lands in rule 6 rather than showing values under the
+  wrong labels.
+- A port set to a reserved or unknown sensor ID has an unknown number of
+  columns. The board and the ports before it are shown; that port and
+  later ones are left empty, with an orange note.
+- Serial forward (ID 6) columns are counted but not shown.
+
 ## Open questions for the client
 
 1. **Date label.** XS says "Date (YYYY-MM-DD)"; the device sends
    `mm/dd/yy` (`10/30/26`). Keep the XS label (#28) or correct it?
 2. ~~Ground speed label.~~ Resolved 2026-11-04: label it m/s, as the
    manual says.
-3. **Header lines (#32).** Per Figure 4-1 the header is two lines, a
-   title row (`X4 Board Sensors,,,,…`, padded with delimiters) and a
-   column-name row. The title row can have the same column count as a
-   data line, so counting columns alone won't reject it. Proposed rule:
-   capture a real header in the J1 terminal first, then decide. Does
-   the header also include a title per port (e.g. `J8 …`)?
+3. ~~Header lines (#32).~~ Resolved 2026-11-12: a real X4 sends no
+   header on J1. See "What a real X4 does".
 4. **Serial forward (ID 6) on J6/J7.** What do its columns contain, and
    can forwarded bytes include the delimiter? If they can, columns after
    J6/J7 can't be located reliably.

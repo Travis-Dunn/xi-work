@@ -10,7 +10,8 @@ import java.nio.charset.StandardCharsets;
  * Read-only terminal for one device port (SoW #33, #34).
  * <p>
  * Shows received bytes decoded as ASCII. Carriage returns are dropped so
- * CRLF line ends show as a single line break. Keeps the last
+ * CRLF line ends show as a single line break, and NUL bytes are dropped
+ * because they have nothing to show. Keeps the last
  * {@value #MAX_LINES} lines. New output scrolls into view only while the
  * view is already at the bottom; if the user has scrolled up, the view
  * stays where it is.
@@ -47,7 +48,10 @@ class TerminalPane extends JScrollPane {
 
     /** Appends received bytes. Must be called on the EDT. */
     void append(byte[] data) {
-        String text = new String(data, StandardCharsets.US_ASCII).replace("\r", "");
+        // NUL shows as a box and can end the text early when copied; an X4
+        // sends one when its port is opened.
+        String text = new String(data, StandardCharsets.US_ASCII)
+                .replace("\r", "").replace("\0", "");
         if (text.isEmpty()) {
             return;
         }

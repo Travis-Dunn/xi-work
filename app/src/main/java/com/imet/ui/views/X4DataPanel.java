@@ -1,11 +1,22 @@
 package com.imet.ui.views;
 
+import com.imet.AppPaths;
+import com.imet.Console;
+import com.imet.device.DataLog;
+import com.imet.device.J3Connection;
 import com.imet.device.X4Connection;
+import com.imet.device.X4DataFormat;
+import com.imet.device.X4Settings;
 
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -22,10 +33,12 @@ import java.util.function.Consumer;
  *   <li>Read-only J1 and J3 terminals along the bottom (#33, #34)</li>
  * </ul>
  *
- * <p>So far only the J1 terminal is live (see {@link #setConnection}); the
- * fields are not filled in yet and the buttons have no actions. Which
- * data column feeds which field is described in
- * {@code docs/x4-data-format.md}.
+ * <p>The J1 terminal is live, and the board and port fields show the
+ * latest data line once the X4's settings have been read (see
+ * {@link #setConnection}). The J3 terminal shows J3 while it is connected.
+ * Logging and Mark work; the card buttons have
+ * no actions yet. Which data
+ * column feeds which field is described in {@code docs/x4-data-format.md}.
  */
 public class X4DataPanel extends JPanel {
 
@@ -35,11 +48,14 @@ public class X4DataPanel extends JPanel {
     private static final Color BUTTON_TEXT  = Color.WHITE;
     private static final Color LABEL_TEXT   = new Color(0x666666);
     private static final Color UNIT_TEXT    = new Color(0x888888);
+    private static final Color ERROR_RED    = new Color(255, 25, 25);
+    private static final Color WARNING_ORANGE = new Color(255, 150, 50);
+    private static final Color STATUS_GREY  = new Color(0x999999);
 
     /** Sensor IDs used with /CJ4–/CJ9 (X4 manual section 4.3). */
-    public static final int SENSOR_NONE        = 0;
-    public static final int SENSOR_TEMPERATURE = 3;
-    public static final int SENSOR_HUMIDITY    = 4;
+    public static final int SENSOR_NONE        = X4Settings.SENSOR_NONE;
+    public static final int SENSOR_TEMPERATURE = X4Settings.SENSOR_TEMPERATURE;
+    public static final int SENSOR_HUMIDITY    = X4Settings.SENSOR_HUMIDITY;
 
     /**
      * Board field labels as {name, unit}, in data-column index order
@@ -88,8 +104,18 @@ public class X4DataPanel extends JPanel {
     private static final String TEMPERATURE_NAME = "10085B iMet-X4 Temperature Sensor";
     private static final String HUMIDITY_NAME    = "10086B iMet-X4 Humidity Sensor";
 
-    /** Width of a value field; wide enough for 00.00000001 latitude. */
+    /** Least width of a value field. */
     private static final int FIELD_WIDTH = 84;
+
+    /**
+     * The widest value the device sends in the board columns that can
+     * outgrow {@link #FIELD_WIDTH}, keyed by column index; their fields
+     * are sized to show it whole (#31).
+     */
+    private static final Map<Integer, String> WIDEST_BOARD_VALUES = Map.of(
+            1,  "9999/9999/9999",   // the date with no GPS fix
+            14, "-00.0000000",      // latitude
+            15, "-000.0000000");    // longitude
 
     /** Width of a port row's sensor-name column, so value columns line up. */
     private static final int SENSOR_NAME_WIDTH = 230;
@@ -139,9 +165,67 @@ public class X4DataPanel extends JPanel {
     /** J1 connection feeding the J1 terminal; null when disconnected. */
     private X4Connection connection;
 
-    /** Hands J1 bytes from the connection's reader thread to the EDT. */
-    private final Consumer<byte[]> j1Receiver =
-            data -> SwingUtilities.invokeLater(() -> j1Terminal.append(data));
+    // ── Logging (#37, #38) ───────────────────────────────────────────────────
+
+    /** The log being written; null when not logging. Set on the EDT. */
+    private volatile DataLog log;
+
+    /** Says which file is being logged to, or why logging stopped. */
+    private JLabel logStatusLabel;
+
+    /**
+     * Called on the connection's reader thread with each chunk from J1.
+     * The log is written here, off the EDT; the terminal and fields are
+     * updated on the EDT.
+     */
+    private final Consumer<byte[]> j1Receiver = data -> {
+        DataLog current = log;
+        if (current != null) {
+            try {
+                current.write(data);
+            } catch (IOException e) {
+                SwingUtilities.invokeLater(() -> logFailed(current, e));
+            }
+        }
+        SwingUtilities.invokeLater(() -> {
+            j1Terminal.append(data);
+            parseData(data);
+        });
+    };
+
+
+    /** J3 connection feeding the J3 terminal; null when disconnected. */
+    private J3Connection j3Connection;
+
+    /** Hands J3 bytes from the J3 reader thread to the EDT. */
+    private final Consumer<byte[]> j3Receiver =
+            data -> SwingUtilities.invokeLater(() -> j3Terminal.append(data));
+
+    // ── Data lines ───────────────────────────────────────────────────────────
+
+    /**
+     * Layout of the data lines, from the settings read at connect; null
+     * until then, so nothing is shown before the settings are known (#27).
+     */
+    private X4DataFormat format;
+
+    /** J1 bytes since the last line ending. */
+    private final StringBuilder lineBuffer = new StringBuilder();
+
+    /** Lines in a row that were not data in the expected format. */
+    private int unmatchedLines;
+
+    /**
+     * A line longer than this is not a data line; the rest of it is
+     * dropped rather than buffered.
+     */
+    private static final int MAX_LINE_LENGTH = 2048;
+
+    /**
+     * After this many lines in a row don't fit the format, say so. One or
+     * two are normal: replies to commands arrive between data lines.
+     */
+    private static final int UNMATCHED_LINES_BEFORE_ERROR = 3;
 
     // ── Layout ───────────────────────────────────────────────────────────────
 
@@ -207,15 +291,177 @@ public class X4DataPanel extends JPanel {
      * J1 terminal (#33). The terminal keeps its history after a
      * disconnect.
      *
+     * <p>On connect, each port row gets the fields of the sensor the X4
+     * said the port is configured for (#29), from the settings read at
+     * that moment (#14).
+     *
      * @param conn the active connection, or {@code null} once it closes
      */
     public void setConnection(X4Connection conn) {
         if (connection != null) {
             connection.removeReceiveListener(j1Receiver);
         }
+        if (conn != connection) {
+            // Nothing more will arrive on the old connection.
+            stopLogging();
+        }
         connection = conn;
         if (conn != null) {
             conn.addReceiveListener(j1Receiver);
+        }
+        logButton.setEnabled(conn != null);
+
+        settingsChanged((conn != null) ? conn.getSettings() : null);
+    }
+
+    /**
+     * Called by the parent when the J3 connection is established or
+     * dropped. While connected, everything received on J3 is shown in the
+     * J3 terminal (#34). The terminal keeps its history after a
+     * disconnect. J3 is only shown: the fields and the log come from J1.
+     *
+     * @param conn the active connection, or {@code null} once it closes
+     */
+    public void setJ3Connection(J3Connection conn) {
+        if (j3Connection != null) {
+            j3Connection.removeReceiveListener(j3Receiver);
+        }
+        j3Connection = conn;
+        if (conn != null) {
+            conn.addReceiveListener(j3Receiver);
+        }
+    }
+
+    /**
+     * Called when the X4's settings have been read again (after Configure
+     * X4), since they decide which port rows are shown and how a data line
+     * is laid out.
+     *
+     * @param settings the device's settings, or {@code null} if they are
+     *                 not known
+     */
+    public void settingsChanged(X4Settings settings) {
+        lineBuffer.setLength(0);
+        unmatchedLines = 0;
+
+        if (settings == null) {
+            // Disconnected. The last values stay on screen, like the
+            // terminal's history, but nothing new is parsed.
+            format = null;
+            showStatus("Waiting for the X4's settings", STATUS_GREY);
+            return;
+        }
+
+        clearFields();
+        for (int port = X4Settings.FIRST_PORT; port <= X4Settings.LAST_PORT; port++) {
+            X4Settings.Port setting = settings.port(port);
+            setPortSensor(port, setting != null ? setting.sensorId() : SENSOR_NONE);
+        }
+
+        format = X4DataFormat.from(settings);
+        showFormatStatus();
+    }
+
+    /** Status for a format with no data trouble: its problem, warning, or nothing. */
+    private void showFormatStatus() {
+        if (format.problem() != null) {
+            // #27: without every setting the data format isn't known.
+            showStatus(format.problem(), ERROR_RED);
+        } else if (format.warning() != null) {
+            showStatus(format.warning(), WARNING_ORANGE);
+        } else {
+            showStatus("", STATUS_GREY);
+        }
+    }
+
+    private void showStatus(String text, Color color) {
+        statusLabel.setText(text);
+        statusLabel.setForeground(color);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    //  Data lines (#27–#32)
+    // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Takes bytes as they arrive on J1, and shows each complete data line
+     * in the board and port fields. Must be called on the EDT.
+     */
+    private void parseData(byte[] data) {
+        if (format == null || format.problem() != null) {
+            return;
+        }
+        for (byte b : data) {
+            if (b == '\n') {
+                String line = lineBuffer.toString();
+                lineBuffer.setLength(0);
+                // Lines end in CR LF; a blank line is not worth counting.
+                if (line.endsWith("\r")) {
+                    line = line.substring(0, line.length() - 1);
+                }
+                if (!line.isEmpty()) {
+                    showLine(line);
+                }
+            } else if (lineBuffer.length() < MAX_LINE_LENGTH) {
+                lineBuffer.append((char) (b & 0xFF));
+            }
+        }
+    }
+
+    private void showLine(String text) {
+        X4DataFormat.Line line = format.parse(text);
+        if (line == null) {
+            unmatchedLines++;
+            if (unmatchedLines == UNMATCHED_LINES_BEFORE_ERROR) {
+                showStatus("Data doesn't match the X4's settings ("
+                        + format.countColumns(text) + " values on a line, "
+                        + format.columnCount() + " expected). "
+                        + "Reconnect J1 to read the settings again.", ERROR_RED);
+                // The values on screen are no longer what the X4 is sending.
+                clearFields();
+            }
+            return;
+        }
+        if (unmatchedLines >= UNMATCHED_LINES_BEFORE_ERROR) {
+            showFormatStatus();
+        }
+        unmatchedLines = 0;
+
+        // Exactly what the device sent (#31). A column the device leaves
+        // out keeps its field, empty (#30).
+        for (int i = 0; i < boardFields.length; i++) {
+            String value = line.board()[i];
+            setValue(boardFields[i], value != null ? value : "");
+        }
+        for (Map.Entry<Integer, JTextField[]> port : portFields.entrySet()) {
+            String[] values = line.ports().get(port.getKey());
+            JTextField[] fields = port.getValue();
+            for (int i = 0; i < fields.length; i++) {
+                setValue(fields[i], values != null && i < values.length ? values[i] : "");
+            }
+        }
+    }
+
+    /**
+     * Shows a value from its first character. Left alone, a text field
+     * scrolls to the end of a value that is too wide for it (e.g. a date
+     * of 9999/9999/9999), hiding the start.
+     */
+    private static void setValue(JTextField field, String value) {
+        if (!value.equals(field.getText())) {
+            field.setText(value);
+            field.setCaretPosition(0);
+        }
+    }
+
+    private void clearFields() {
+        for (JTextField field : boardFields) {
+            field.setText("");
+        }
+        for (JTextField[] fields : portFields.values()) {
+            for (JTextField field : fields) {
+                field.setText("");
+            }
         }
     }
 
@@ -233,6 +479,148 @@ public class X4DataPanel extends JPanel {
         headingRow.add(statusLabel);
 
         return headingRow;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    //  Logging and Mark (#37, #38)
+    // ────────────────────────────────────────────────────────────────────────
+
+    private static final DateTimeFormatter LOG_NAME_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
+
+    /** The Start Logging / Stop Logging button. */
+    private void onLogButton() {
+        if (log != null) {
+            stopLogging();
+            return;
+        }
+        Path file = chooseLogFile();
+        if (file != null) {
+            startLogging(file);
+        }
+    }
+
+    /**
+     * Asks where to save the log: a .txt file, by default in the Data
+     * folder under the install directory (#37).
+     *
+     * @return the file, or {@code null} if the user cancelled
+     */
+    private Path chooseLogFile() {
+        Path dir = AppPaths.dataDir();
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            // E.g. no permission in the install directory. The dialog
+            // then opens in the user's own folder.
+            Console.log("Could not create " + dir + ": " + e);
+        }
+
+        JFileChooser chooser = new JFileChooser(Files.isDirectory(dir) ? dir.toFile() : null);
+        chooser.setDialogTitle("Start Logging");
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+                "Text files (*.txt)", "txt"));
+        chooser.setSelectedFile(new java.io.File(chooser.getCurrentDirectory(),
+                "X4_" + LocalDateTime.now().format(LOG_NAME_TIME) + ".txt"));
+
+        while (true) {
+            if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+                return null;
+            }
+            Path file = chooser.getSelectedFile().toPath();
+            if (!file.getFileName().toString().contains(".")) {
+                file = file.resolveSibling(file.getFileName() + ".txt");
+            }
+            if (!Files.exists(file)) {
+                return file;
+            }
+            int answer = JOptionPane.showConfirmDialog(this,
+                    file.getFileName() + " already exists. Replace it?",
+                    "Start Logging", JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+            if (answer == JOptionPane.YES_OPTION) {
+                return file;
+            }
+            chooser.setSelectedFile(file.toFile());
+        }
+    }
+
+    /** Starts recording J1 to {@code file}, replacing any file there. */
+    private void startLogging(Path file) {
+        try {
+            log = new DataLog(file);
+        } catch (IOException e) {
+            Console.log("Could not start logging to " + file + ": " + e);
+            showLogStatus("Could not create " + file.getFileName()
+                    + ": " + reason(e), ERROR_RED);
+            return;
+        }
+        Console.log("Logging J1 to " + file);
+        logButton.setText("Stop Logging");
+        markButton.setEnabled(true);
+        showLogStatus("Logging to " + file.getFileName(), STATUS_GREY);
+        logStatusLabel.setToolTipText(file.toString());
+    }
+
+    /** Stops recording, if recording. */
+    private void stopLogging() {
+        DataLog current = log;
+        if (current == null) {
+            return;
+        }
+        log = null;
+        logButton.setText("Start Logging");
+        markButton.setEnabled(false);
+        try {
+            current.close();
+            Console.log("Stopped logging to " + current.file());
+            showLogStatus("Saved " + current.file().getFileName(), STATUS_GREY);
+        } catch (IOException e) {
+            Console.log("Could not finish " + current.file() + ": " + e);
+            showLogStatus("Could not finish " + current.file().getFileName()
+                    + ": " + reason(e), ERROR_RED);
+        }
+    }
+
+    /** Called on the EDT when a write to the log failed on the reader thread. */
+    private void logFailed(DataLog failed, IOException e) {
+        if (log != failed) {
+            return; // already stopped
+        }
+        Console.log("Logging to " + failed.file() + " failed: " + e);
+        stopLogging();
+        showLogStatus("Logging stopped: could not write "
+                + failed.file().getFileName() + ": " + reason(e), ERROR_RED);
+    }
+
+    /** Puts the text in the mark field into the log, on a line of its own (#38). */
+    private void onMark() {
+        DataLog current = log;
+        if (current == null) {
+            return;
+        }
+        try {
+            current.mark(markField.getText());
+        } catch (IOException e) {
+            logFailed(current, e);
+        }
+    }
+
+    private void showLogStatus(String text, Color color) {
+        logStatusLabel.setText(text);
+        logStatusLabel.setForeground(color);
+        logStatusLabel.setToolTipText(null);
+    }
+
+    /** A file error in words; these exceptions' own messages are just the path. */
+    private static String reason(IOException e) {
+        if (e instanceof java.nio.file.NoSuchFileException) {
+            return "the folder does not exist";
+        }
+        if (e instanceof java.nio.file.AccessDeniedException) {
+            return "permission denied";
+        }
+        return (e.getMessage() != null) ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -371,6 +759,7 @@ public class X4DataPanel extends JPanel {
 
         for (int i = 0; i < BOARD_LABELS.length; i++) {
             boardFields[i] = createValueField();
+            widenFor(boardFields[i], WIDEST_BOARD_VALUES.get(i));
             gbc.gridx = 1 + i % BOARD_FIELDS_PER_ROW;
             gbc.gridy = i / BOARD_FIELDS_PER_ROW;
             panel.add(createValueColumn(BOARD_LABELS[i][0], BOARD_LABELS[i][1],
@@ -464,19 +853,30 @@ public class X4DataPanel extends JPanel {
         logButton.setPreferredSize(new Dimension(
                 logButton.getFontMetrics(logButton.getFont())
                         .stringWidth("Stop Logging") + 32, 32));
+        logButton.setEnabled(false); // until J1 connects
+        logButton.addActionListener(e -> onLogButton());
         right.add(logButton);
 
         markButton = createStyledButton("Mark");
         markButton.setEnabled(false); // no log open yet
+        markButton.addActionListener(e -> onMark());
         right.add(markButton);
 
         markField = new JTextField(14);
         markField.putClientProperty("JTextField.placeholderText", "Mark:");
         markField.setPreferredSize(new Dimension(
                 markField.getPreferredSize().width, 32));
+        markField.addActionListener(e -> onMark()); // Enter in the field
         right.add(markField);
 
         bar.add(right, BorderLayout.EAST);
+
+        // Between the two groups: which file is being logged to, or what
+        // went wrong (#6).
+        logStatusLabel = new JLabel("", SwingConstants.RIGHT);
+        logStatusLabel.setFont(logStatusLabel.getFont().deriveFont(Font.PLAIN, 12f));
+        logStatusLabel.setBorder(BorderFactory.createEmptyBorder(0, 12, 0, 4));
+        bar.add(logStatusLabel, BorderLayout.CENTER);
         return bar;
     }
 
@@ -536,6 +936,22 @@ public class X4DataPanel extends JPanel {
         field.setPreferredSize(size);
         field.setMaximumSize(size);
         return field;
+    }
+
+    /** Widens a value field, if need be, so that {@code widest} fits. */
+    private static void widenFor(JTextField field, String widest) {
+        if (widest == null) {
+            return;
+        }
+        Insets insets = field.getInsets();
+        // A little slack: text fields keep a pixel or two for the caret.
+        int needed = field.getFontMetrics(field.getFont()).stringWidth(widest)
+                + insets.left + insets.right + 4;
+        if (needed > FIELD_WIDTH) {
+            Dimension size = new Dimension(needed, field.getPreferredSize().height);
+            field.setPreferredSize(size);
+            field.setMaximumSize(size);
+        }
     }
 
     /** Name, then unit (or a blank line), then the value field, centred. */

@@ -83,24 +83,58 @@ skipping streamed data lines.
 - **The plugin** (`PluginTestExample`):
   - prefix-matches replies, skips data lines and ignores a leading `/`
   - runs one call at a time (`synchronized`)
-  - ACK and query timeouts are both 500 ms
+  - ACK and query timeouts are both 2 s (see open item 1)
 - **Supported messages:**
   - query + command: `serialNumber`, `dataPublishingFrequency`,
     `pressureBias`, `toggleDataPublishing` (1/0 in the lexicon, ON/OFF on the
     device), `j3BaudRate`
   - query only: `boardDataFormat` (/CBD?, returns e.g. `0,30720`)
-  - parameterized: `configurePortToEmpty` / `AirThermistor` / `HYT271` /
-    `SerialForward` for ports 4–9. They return the values the lexicon lists.
-    The trailing bitmask is NOT returned.
+  - query only: `acknowledgeDevice` (/ACK?, returns 1 or 0)
+  - command only: `resetBoardData` (/CBD=0,0)
+  - parameterized + command: `configurePortToEmpty` / `AirThermistor` /
+    `HYT271` / `SerialForward` for ports 4–9. The queries return the values
+    the lexicon lists; the trailing bitmask is NOT returned. The commands
+    take the port, then those same values, and always send a bitmask of 0.
 - **Lexicon** (`lexiconVersion` 0.2.0, 22 messages): added `j3BaudRate` and
   `boardDataFormat`. Fixed `serialNumber`'s `return_q`, and the duplicate
   `return_p` → `return_p_len` in all four `configurePortTo…`.
 - **App use of the plugin:**
-  - J1 connect queries `j3BaudRate`.
-  - The Configuration fetch uses the plugin; it runs when the Configuration
-    screen is shown. Each port needs at most two `_p` calls: "empty?", then
-    the sensor this screen offers for that port.
+  - J1 connect reads every setting once (`X4Connection.readSettings`, SoW
+    #14) into an `X4Settings`, including `boardDataFormat`. The Hardware,
+    Configuration and Data screens all use that one read
+    (`connection.getSettings()`); nothing re-reads while connected.
+  - Each port needs up to four `_p` calls: "empty?", then each sensor,
+    starting with the one the port is meant for.
+  - A setting with no reply is named in `X4Settings.missing()` and reported
+    on screen. After two unanswered queries in a row the rest are skipped.
   - `X4Connection.sendCommand` has been removed.
+- **Configure X4 (#26):** `X4Connection.configure(wanted)` sends the
+  settings that differ from what the X4 was last known to hold
+  (`X4SettingsWriter`), reads all the settings back, and repeats for any
+  that still differ, up to three passes. It returns the names of any the X4
+  still doesn't hold. The other screens are then given the new settings.
+  - The X4 never acknowledges an assignment, so the read-back is the check.
+  - The plugin waits 1.5 s after every assignment before anything else can
+    be sent (`ASSIGNMENT_SETTLE_MS`); see "How the X4 handles commands".
+    That is why only differing settings are sent.
+  - Order: board data format and ports first, then serial number, bias, J3
+    baud, frequency, and data on/off last.
+  - A port showing "Other (left unchanged)" is not written.
+  - Board data is always `/CBD=0,0` (SoW #16), so a device on the factory
+    `0,30720` gains the four battery columns the first time.
+- **How the X4 handles commands** (worked out from real-X4 logs,
+  2026-11-12; not from the manual):
+  - While publishing, the X4 acts on commands once per publishing cycle,
+    just before it sends a data line. A cycle takes about 0.7 s however
+    high DPF is set (at DPF=3 the uptime still steps by 0.70).
+  - At DPF=1 there is a gap of about 0.3 s after each line in which
+    commands are answered within 20 ms. At DPF of about 1.4 and above
+    there is no gap, and every reply takes up to 0.7 s.
+  - Only one command can wait. `/DPF=4` followed 150 ms later by `/DPF?`
+    got the reply to `/DPF?` and the 4 was never taken.
+  - This also explains the reply latency in open item 1: a 500 ms timeout
+    is shorter than a cycle.
+  - `tools/fake_x4.py` behaves this way by default (`--busy`).
 - **Console:** every J1 op, raw byte, reply and plugin decision is logged with
   timestamps. The console test menu (stdin) is ON: `CONSOLE_TEST_ENABLED` in
   `MainFrame`. It exercises plugin messages over the GUI's J1 connection.
@@ -122,21 +156,34 @@ skipping streamed data lines.
 
 | # | Status |
 |---|---|
-| 27 No data until settings read | Started. Status text only; nothing marks settings as read yet (needs #14). The J1 terminal shows data before settings: is that OK under #27? |
-| 28 Board fields | Layout done (XS labels; ground speed m/s per my answer). Not filled. |
-| 29 Port fields | Layout done; `setPortSensor(port, id)` shows a row's fields. Not filled. |
+| 27 No data until settings read | Done: fields fill only once the settings have been read at connect. The J1 terminal shows raw data regardless. |
+| 28 Board fields | Done (XS labels; ground speed m/s per my answer). |
+| 29 Port fields | Done for the temperature and humidity sensors. |
 | 30 Fields stay when a column is off | Done by design. |
-| 31 Show exactly as sent | Parser not started. |
-| 32 Ignore header | Parser not started; needs a real header sample. |
+| 31 Show exactly as sent | Done (`X4DataFormat`, with unit tests from a real capture). |
+| 32 Ignore header | Done as a precaution: a real X4 sends no header on J1 (captured 2026-11-12). |
 | 33 J1 terminal | Done (ASCII, 2000-line history, follows only at the bottom). |
-| 34 J3 terminal | Layout only; J3 has no reader. |
+| 34 J3 terminal | Done: `J3Connection` has its own reader thread feeding the J3 terminal. Tested on the fake X4 only (no J3 cable). |
 | 35 Erase Card | Button only. |
 | 36 Get from Card + progress | Button and hidden progress bar only. |
-| 37 Start/Stop Logging | Button only. |
-| 38 Mark | Button and text field only. |
+| 37 Start/Stop Logging | Done. Records J1 byte for byte (`DataLog`); the save dialog opens in `<install dir>/Data` with a timestamped `.txt` name. Stops on disconnect. |
+| 38 Mark | Done. `Mark: <text>\r\n` on a line of its own: a mark made mid-line waits for that line's end. Enter in the field also marks. |
 | 39 X4 picture | Done. |
 
 I checked the layout against XS on Windows; it looks good.
+
+## SoW #14–#26 (X4 Configuration screen) status
+
+| # | Status |
+|---|---|
+| 14 Poll at connect | Done. |
+| 15 X4 image | Done. |
+| 16 Sensor options and fields | Done, except the TCal "Load from File" button (disabled; file format unknown). |
+| 17–21 Serial, frequency, bias, J3 baud, data toggle | Read and write done. |
+| 22 Restore Defaults | Button disabled; TBD in the SoW. |
+| 23 Fetch | Not implemented, as the SoW says. |
+| 24, 25 Load from File, Save to File | Buttons disabled; TBD in the SoW. |
+| 26 Configure X4 | Done. Two real-X4 tries lost `/DPF=` because another command followed it too closely; the paced version is not yet tried on a real X4. |
 
 ## Open items, most pressing first
 
@@ -156,10 +203,11 @@ I checked the layout against XS on Windows; it looks good.
      | TDP off | 7–50 | 0 |
      | DPF 0.5 | 14–70 | 0 |
 
-   - Options:
-     - Interim: raise the plugin's ACK and query timeouts to about 2 s.
-     - Longer term: turn TDP off while reading the configuration, if the
-       client says XS did.
+   - Done 2026-11-12: both timeouts raised to 2 s. The client doesn't see
+     the latency as a problem. Retrying was discussed and deferred as
+     polish.
+   - Longer term: turn TDP off while reading the configuration, if the
+     client says XS did.
    - Draft client questions:
      - Is this expected from the firmware?
      - What's the longest a reply can take?
@@ -168,18 +216,15 @@ I checked the layout against XS on Windows; it looks good.
      - Could GPS state matter? (0 vs 10 satellites on different days.)
 2. **DPF=10 gives `DPF=ERR`.** The manual says "between 0 and 10", but the
    Configuration spinner allows 10. Ask the client.
-3. **#14: poll on connect.**
-   - Today the fetch runs when the Configuration screen is shown.
-   - #14 wants it at connect, including `boardDataFormat`, with the results
-     shared with the Data screen (#27).
-   - This would replace the separate J3 query in `HardwarePanel`.
+3. **#14: poll on connect.** Done 2026-11-12 (see Architecture). Still
+   open: the client asked for a cache that re-reads whenever something
+   changes; for now it is read once per connection.
 4. **Port bitmask.** The `configurePortTo…` returns omit each sensor's
    trailing bitmask, which the Data screen needs if a port masks columns.
    Lexicon decision pending.
-5. **Data parser (#28–#32).** Column mapping is in `docs/x4-data-format.md`.
-   Open questions there: date label vs `mm/dd/yy`, header format (capture one
-   on hardware), serial-forward columns, reserved IDs, and a non-comma
-   delimiter. Note the device doesn't zero-pad (`1:12:36`, `11/5/26`).
+5. **Data parser (#28–#32).** Done 2026-11-12; rules and limits are in
+   `docs/x4-data-format.md`. Still open there: the date label, serial
+   forward, reserved IDs, and port bitmasks (assumed 0, see item 4).
 6. **Connect error handling.** The J1 Connect `SwingWorker` catches only
    `Exception`. An `Error` (e.g. `AbstractMethodError` from a stale plugin
    jar, or jssc's `UnsatisfiedLinkError`) leaves the UI saying "connected".
@@ -187,9 +232,11 @@ I checked the layout against XS on Windows; it looks good.
    match the app's.
 7. **Unplugged cable.** The reader logs it and stops, but the UI still says
    connected.
-8. **J3** has no reader yet (#34). It also doesn't fit pluginBase's
-   one-transport-per-device model: J3's baud comes from a J1 query. This
-   needs a deliberate design decision.
+8. **J3** (#34) is read by the app directly, with no plugin involved:
+   nothing is ever sent on J3, and its baud comes from the J1 settings. That
+   sidesteps pluginBase's one-transport-per-device model rather than
+   fitting it. If Configure X4 changes the J3 baud while J3 is connected,
+   J3 is disconnected with a notice.
 9. **Lexicon odds and ends:**
    - `forwardBytesToJ6`/`J7` list `return_p` on query/command messages.
    - `enablePort` `_p` isn't implemented.
@@ -197,13 +244,18 @@ I checked the layout against XS on Windows; it looks good.
 10. **`notes.txt`** (SoW requirement status and client questions) didn't come
     across from the old repo.
 11. **Test tools.** The rounded-button code is duplicated per panel; a shared
-    helper would be a small cleanup. The hardware-free test tools lived in a
-    session scratchpad and will be lost:
-    - a fake X4 (Python on a pseudo-terminal, with modes `--stream`,
-      `--slash`, `--silent`, `--no-srn`, `--collide`)
-    - Java harnesses that drive the real panels through reflection under Xvfb
+    helper would be a small cleanup. The hardware-free test tools are now
+    under `tools/`:
+    - `tools/fake_x4.py`: a fake X4 on two pseudo-terminals, J1 and J3
+      (`--help` lists
+      its options, e.g. `--silent`, `--no-srn`, `--delay`, `--set`). Its
+      header text and `/VER?` reply are guesses.
+    - `tools/CaptureHeader.java`: records what a real X4 sends on J1 when
+      its data format changes.
+    - `tools/harness/run.sh`: runs the real app against the fake under
+      Xvfb, drives the panels through reflection, and prints what they show.
 
-    Recreate them as needed, or commit them under `tools/`. Gotchas:
+    Gotchas:
     - Run GUI harnesses with the distribution folder as the working
       directory, or `Loader` won't find the plugin.
     - A root container ignores jssc's exclusive port lock, so "port busy"
@@ -211,10 +263,8 @@ I checked the layout against XS on Windows; it looks good.
 
 ## Suggested next steps
 
-1. Decide the latency fix: an interim 2 s timeout, and/or ask the client.
-2. #14: fetch at connect, shared settings, `boardDataFormat`, and the bitmask
-   decision.
-3. Parser (#27–#32), after capturing a real header.
-4. J3 reader and terminal (#34).
-5. Logging and Mark (#37, #38).
-6. Card buttons (#35, #36).
+1. Card buttons (#35, #36).
+2. Try J3 on a real X4 with the J3-to-USB cable.
+4. Waiting on the client: the TCal "Load from File" (needs a sample
+   calibration file), and Restore Defaults, Load from File and Save to File
+   (#22, #24, #25, TBD in the SoW). Their buttons are shown but disabled.

@@ -47,15 +47,24 @@ public class TabContentPanel extends JPanel {
         // Listen for device selection
         hardwarePanel.setDeviceSelectionListener(this::onDeviceSelected);
 
-        // Forward J1 connect/disconnect events to the Configuration panel so it
-        // can enable its Fetch button and access the device for polling, and
-        // to the X4 Data panel for its J1 terminal.
+        // Forward J1 connect/disconnect events to the Configuration panel,
+        // which shows the settings read at connect, and to the X4 Data
+        // panel for those settings and its J1 terminal.
         hardwarePanel.setConnectionListener(conn -> {
             for (Component c : bodyPanel.getComponents()) {
                 if (c instanceof ConfigurationPanel cp) {
                     cp.setConnection(conn);
                 } else if (c instanceof X4DataPanel dp) {
                     dp.setConnection(conn);
+                }
+            }
+        });
+
+        // Same for J3, which feeds the X4 Data panel's J3 terminal.
+        hardwarePanel.setJ3ConnectionListener(conn -> {
+            for (Component c : bodyPanel.getComponents()) {
+                if (c instanceof X4DataPanel dp) {
+                    dp.setJ3Connection(conn);
                 }
             }
         });
@@ -73,6 +82,7 @@ public class TabContentPanel extends JPanel {
                 // Stop a discarded Data panel from listening to J1.
                 if (c instanceof X4DataPanel dp) {
                     dp.setConnection(null);
+                    dp.setJ3Connection(null);
                 }
                 bodyPanel.remove(c);
             }
@@ -86,8 +96,20 @@ public class TabContentPanel extends JPanel {
             case "IMet-X4" -> {
                 views.add(VIEW_CONFIGURATION);
                 views.add(VIEW_DATA);
-                bodyPanel.add(new ConfigurationPanel(), VIEW_CONFIGURATION);
-                bodyPanel.add(new X4DataPanel(), VIEW_DATA);
+                ConfigurationPanel configuration = new ConfigurationPanel();
+                X4DataPanel data = new X4DataPanel();
+                // If J1 is already connected (the product was picked
+                // again), the new panels still need its settings.
+                // After Configure X4, the other screens follow the device.
+                configuration.setSettingsListener(settings -> {
+                    data.settingsChanged(settings);
+                    hardwarePanel.settingsChanged(settings);
+                });
+                configuration.setConnection(hardwarePanel.getJ1Connection());
+                data.setConnection(hardwarePanel.getJ1Connection());
+                data.setJ3Connection(hardwarePanel.getJ3Connection());
+                bodyPanel.add(configuration, VIEW_CONFIGURATION);
+                bodyPanel.add(data, VIEW_DATA);
             }
             case "IMet-XQ2" -> {
                 views.add(VIEW_DATA);
