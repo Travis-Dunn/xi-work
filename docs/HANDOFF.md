@@ -92,11 +92,20 @@ skipping streamed data lines.
   - query only: `boardDataFormat` (/CBD?, returns e.g. `0,30720`)
   - query only: `acknowledgeDevice` (/ACK?, returns 1 or 0)
   - command only: `resetBoardData` (/CBD=0,0)
+  - query only: `sdCardDataSize` (/GET?, bytes in log.dat, or -1)
+  - query + command: `eraseSDCardData` (/ERD). Both wait for the X4's
+    answer (up to 30 s); the query returns 1 for "Complete", 0 for "Card
+    not detected".
+  - command only: `getSDCardData` (/GET). It only starts the X4 sending;
+    the app reads what follows from J1 itself.
   - parameterized + command: `configurePortToEmpty` / `AirThermistor` /
     `HYT271` / `SerialForward` for ports 4–9. The queries return the values
     the lexicon lists; the trailing bitmask is NOT returned. The commands
     take the port, then those same values, and always send a bitmask of 0.
-- **Lexicon** (`lexiconVersion` 0.2.0, 22 messages): added `j3BaudRate` and
+- **Lexicon** (`lexiconVersion` 0.3.0, 23 messages): 0.3.0 added
+  `sdCardDataSize`, gave `eraseSDCardData` a query form, and turned
+  `getSDCardData` from a query into a command (my changes, not yet put to
+  the client). 0.2.0 added `j3BaudRate` and
   `boardDataFormat`. Fixed `serialNumber`'s `return_q`, and the duplicate
   `return_p` → `return_p_len` in all four `configurePortTo…`.
 - **App use of the plugin:**
@@ -142,6 +151,26 @@ skipping streamed data lines.
     as a backup. Loaded onto a different X4, the status line warns in
     orange that Configure X4 will replace that X4's. To share a setup
     without them, delete those two lines from the file.
+- **The microSD card (#35, #36):** `X4Connection.eraseCard`,
+  `cardDataSize`, `startCardData`; `CardDownload` saves the stream.
+  - The plugin interface has no call that returns a stream, and log.dat
+    can be megabytes (about 11 kB/s at 115200 baud), so the plugin only
+    sends `/GET` and the app's J1 listener takes the bytes, counting them
+    against `/GET?` for the progress bar.
+  - Nothing marks the end of the stream, so `CardDownload` decides: once
+    the expected bytes are in, the first 300 ms pause is the end; before
+    that, 5 s of silence, or of a trickle under a tenth of the peak rate
+    (data lines), is an early stop. Slightly more than `/GET?` said can
+    arrive, since the X4 logs to the card until `/GET` is acted on; it is
+    all kept.
+  - While it runs: the button reads Cancel; the fields ignore J1 (the
+    card's lines are old data); the J1 terminal and any PC log still get
+    everything. Cancel only stops saving: the manual has no command to
+    stop the X4 sending.
+  - Unknown until tried on a real X4: whether `/GET?` matches the bytes
+    sent, how fast and how evenly the X4 sends, how long `/ERD` takes, and
+    whether a data line can slip in just after `/GET` is sent (it would
+    land at the start of the file).
 - **Calibration files:** `ThermistorCalibration` is not X4-specific; the
   XQ2's "Load Coefficients From File" (#50) names the same file.
 - **How the X4 handles commands** (worked out from real-X4 logs,
@@ -186,8 +215,8 @@ skipping streamed data lines.
 | 32 Ignore header | Done as a precaution: a real X4 sends no header on J1 (captured 2026-11-12). |
 | 33 J1 terminal | Done (ASCII, 2000-line history, follows only at the bottom). |
 | 34 J3 terminal | Done: `J3Connection` has its own reader thread feeding the J3 terminal. Tested on the fake X4 only (no J3 cable). |
-| 35 Erase Card | Button only. |
-| 36 Get from Card + progress | Button and hidden progress bar only. |
+| 35 Erase Card | Done: asks first, sends `/ERD`, then shows "Card erased" or "Card not detected". Fake X4 only. |
+| 36 Get from Card + progress | Done: `/GET?` for the size, a save dialog, then `/GET`; the bytes are saved as they arrive, with a progress bar and Cancel. Fake X4 only; see "The microSD card". |
 | 37 Start/Stop Logging | Done. Records J1 byte for byte (`DataLog`); the save dialog opens in `<install dir>/Data` with a timestamped `.txt` name. Stops on disconnect. |
 | 38 Mark | Done. `Mark: <text>\r\n` on a line of its own: a mark made mid-line waits for that line's end. Enter in the field also marks. |
 | 39 X4 picture | Done. |
@@ -277,7 +306,9 @@ I checked the layout against XS on Windows; it looks good.
     - `tools/harness/run.sh`: runs the real app against the fake under
       Xvfb, drives the panels through reflection, and prints what they show.
       `FILES=1` and `RESTORE=1` cover #22, #24 and #25; `CAL=<file>` loads
-      a calibration file.
+      a calibration file; `CARD=1` and `CARD=cancel` cover #35 and #36.
+      The fake's card grows as it publishes, and `--card-stall` cuts a
+      download short.
 
     Gotchas:
     - Run GUI harnesses with the distribution folder as the working
@@ -287,7 +318,10 @@ I checked the layout against XS on Windows; it looks good.
 
 ## Suggested next steps
 
-1. Card buttons (#35, #36).
-2. Try J3 on a real X4 with the J3-to-USB cable.
-3. Try Configure X4 (paced) and Restore Data Defaults on a real X4.
+1. A session on a real X4: Configure X4 (paced), Restore Data Defaults,
+   Erase Card, Get from Card (compare the saved file with the card's
+   log.dat), and J3 with the J3-to-USB cable.
+2. Before release: turn off `CONSOLE_TEST_ENABLED`; settle the frequency
+   limit (open item 2); connection-state errors (open items 6, 7).
+3. Tell the client about the lexicon changes in 0.3.0.
 4. XQ2 (#40–#56), new in Rev 04.

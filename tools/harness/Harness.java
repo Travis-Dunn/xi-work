@@ -221,6 +221,61 @@ public class Harness {
         }
         shot(frame.getContentPane(), out + "/" + tag + "-restored.png");
     }
+    static void waitFor(java.util.concurrent.Callable<Boolean> done, long ms) throws Exception {
+        long t0 = System.currentTimeMillis();
+        while (!done.call() && System.currentTimeMillis() - t0 < ms) Thread.sleep(50);
+    }
+    /* Clicks Get from Card, saves to the file, and waits for it to end.
+       cancelAfterMs >= 0 clicks Cancel that long after it starts. */
+    static void getFromCard(Object dp, java.io.File file, long cancelAfterMs) throws Exception {
+        JButton get = (JButton) get(dp, "getFromCardButton");
+        JLabel status = (JLabel) get(dp, "logStatusLabel");
+        JProgressBar bar = (JProgressBar) get(dp, "cardProgress");
+        file.delete();
+        long t0 = System.currentTimeMillis();
+        clickAndChoose(get, file);
+        if (get.getText().equals("Cancel")) {
+            int peak = 0; boolean shown = bar.isVisible();
+            if (cancelAfterMs >= 0) { Thread.sleep(cancelAfterMs); peak = bar.getValue(); SwingUtilities.invokeAndWait(get::doClick); }
+            while (get.getText().equals("Cancel") && System.currentTimeMillis() - t0 < 60000) { peak = Math.max(peak, bar.getValue()); Thread.sleep(50); }
+            System.out.println("HARNESS card get: bar shown=" + shown + " reached " + peak + "% now shown=" + bar.isVisible());
+        }
+        Thread.sleep(200);
+        System.out.println("HARNESS card get took ~" + (System.currentTimeMillis() - t0) + " ms; status=[" + status.getText() + "] file=" + (file.exists() ? file.length() + " bytes" : "none")
+                + " erase enabled=" + ((JButton) get(dp, "eraseCardButton")).isEnabled());
+    }
+    /* CARD=1: Get from Card, Erase Card (cancel, then OK), Get from Card
+       again. CARD=cancel: cancel a download part way. */
+    static void card(Object dp, String out, String tag, String mode) throws Exception {
+        JButton erase = (JButton) get(dp, "eraseCardButton");
+        JLabel status = (JLabel) get(dp, "logStatusLabel");
+        java.io.File file = new java.io.File(out, tag + "-card.txt");
+        if (mode.equals("cancel")) {
+            getFromCard(dp, file, 700);
+            Thread.sleep(6000);   // the X4 is still sending
+            System.out.println("HARNESS card after cancel " + dataFields(dp));
+            return;
+        }
+        getFromCard(dp, file, -1);
+        if (file.exists() && file.length() > 0) {
+            String text = java.nio.file.Files.readString(file.toPath(), java.nio.charset.StandardCharsets.ISO_8859_1);
+            String[] lines = text.split("\r\n");
+            System.out.println("HARNESS card file first=[" + lines[0] + "] last=[" + lines[lines.length - 1] + "] ends with CRLF=" + text.endsWith("\r\n"));
+        }
+        System.out.println("HARNESS card fields after get " + dataFields(dp));
+        for (int answer : new int[] {JOptionPane.CANCEL_OPTION, JOptionPane.OK_OPTION}) {
+            SwingUtilities.invokeLater(erase::doClick);
+            JOptionPane pane = inDialog(JOptionPane.class);
+            if (pane == null) { System.out.println("HARNESS erase asked nothing"); break; }
+            System.out.println("HARNESS erase asks [" + pane.getMessage() + "]");
+            SwingUtilities.invokeAndWait(() -> pane.setValue(answer));
+            Thread.sleep(200);
+            waitFor(erase::isEnabled, 40000);
+            Thread.sleep(200);
+            System.out.println("HARNESS erase answer=" + (answer == JOptionPane.OK_OPTION ? "OK" : "Cancel") + " status=[" + status.getText() + "]");
+        }
+        getFromCard(dp, new java.io.File(out, tag + "-card2.txt"), -1);
+    }
     /* LOG=1: log to a file (skipping the file dialog), mark twice, stop. */
     static void logging(Object dp, String out, String tag) throws Exception {
         java.nio.file.Path file = java.nio.file.Path.of(out, tag + "-log.txt");
@@ -337,6 +392,7 @@ public class Harness {
                         + " last J3 line=[" + lines[lines.length - 1] + "]");
             }
             if (System.getenv("LOG") != null) logging(dp, out, tag);
+            if (System.getenv("CARD") != null) card(dp, out, tag, System.getenv("CARD"));
             shot(frame.getContentPane(), out + "/" + tag + "-data.png");
             if (a.length > 3) {
                 // Send the device a command behind the app's back, as another

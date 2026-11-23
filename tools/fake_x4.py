@@ -190,6 +190,9 @@ class FakeX4:
         """Sends a data line on J1 and J3."""
         line = self.data_line()
         self.send(line)
+        if self.args.card_bytes >= 0:
+            # Data lines also go to log.dat on the card (manual 4.1).
+            self.card += line.encode("latin-1")
         try:
             os.write(self.j3_master, line.encode("latin-1"))
         except BlockingIOError:
@@ -232,8 +235,11 @@ class FakeX4:
             if not self.card:
                 self.reply("Card not detected")
             else:
-                for i in range(0, len(self.card), 512):
-                    self.send(self.card[i:i + 512])
+                card = self.card
+                if self.args.card_stall >= 0:
+                    card = card[:self.args.card_stall]
+                for i in range(0, len(card), 512):
+                    self.send(card[i:i + 512])
                     time.sleep(0.01)
         elif upper.endswith("?"):
             key = upper[:-1]
@@ -365,6 +371,8 @@ def main():
                    help="report 9999 for the GPS columns")
     p.add_argument("--card-bytes", type=int, default=20000, metavar="N",
                    help="size of log.dat on the card; -1 for no card")
+    p.add_argument("--card-stall", type=int, default=-1, metavar="N",
+                   help="stop sending the card's data after N bytes")
     p.add_argument("--verbose", action="store_true",
                    help="print each command received")
     args = p.parse_args()

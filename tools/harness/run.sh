@@ -16,6 +16,9 @@
 # and bad files. Set CAL to a temperature sensor's calibration file to
 # load it into J8 and configure. Set RESTORE=1 to also click Restore Data Defaults.
 #
+# Set CARD=1 to also try Get from Card and Erase Card (see the fake's
+# --card-bytes and --card-stall), or CARD=cancel to cancel a download.
+#
 # Set J3=1 to also connect J3 and report the J3 terminal.
 # Set LOG=1 to also log J1 to out/<tag>-log.txt with two marks.
 #
