@@ -2,6 +2,7 @@ package com.imet.ui.views;
 
 import com.imet.AppPaths;
 import com.imet.Console;
+import com.imet.device.CardDownload;
 import com.imet.device.DataLog;
 import com.imet.device.J3Connection;
 import com.imet.device.X4Connection;
@@ -36,8 +37,7 @@ import java.util.function.Consumer;
  * <p>The J1 terminal is live, and the board and port fields show the
  * latest data line once the X4's settings have been read (see
  * {@link #setConnection}). The J3 terminal shows J3 while it is connected.
- * Logging and Mark work; the card buttons have
- * no actions yet. Which data
+ * Which data
  * column feeds which field is described in {@code docs/x4-data-format.md}.
  */
 public class X4DataPanel extends JPanel {
@@ -148,6 +148,18 @@ public class X4DataPanel extends JPanel {
     /** Progress of a "Get from Card" transfer (#36); hidden until one runs. */
     private JProgressBar cardProgress;
 
+    /**
+     * The card's data being saved (#36); null when none is. Set on the
+     * EDT, and fed on the reader thread.
+     */
+    private volatile CardDownload download;
+
+    /** Updates the progress bar and notices the end of a download. */
+    private final Timer downloadTimer = new Timer(200, e -> onDownloadTick());
+
+    /** True while the X4 is being asked to erase, or for the card's size. */
+    private boolean cardBusy;
+
     /** Toggles between "Start Logging" and "Stop Logging" (#37). */
     private JButton logButton;
 
@@ -187,9 +199,20 @@ public class X4DataPanel extends JPanel {
                 SwingUtilities.invokeLater(() -> logFailed(current, e));
             }
         }
+        CardDownload card = download;
+        if (card != null) {
+            try {
+                card.receive(data);
+            } catch (IOException e) {
+                SwingUtilities.invokeLater(() -> downloadFailed(card, e));
+            }
+        }
         SwingUtilities.invokeLater(() -> {
             j1Terminal.append(data);
-            parseData(data);
+            // The card's data is old data lines; the fields show live ones.
+            if (download == null) {
+                parseData(data);
+            }
         });
     };
 
@@ -304,12 +327,17 @@ public class X4DataPanel extends JPanel {
         if (conn != connection) {
             // Nothing more will arrive on the old connection.
             stopLogging();
+            if (download != null) {
+                finishDownload(DownloadEnd.STOPPED_EARLY);
+            }
+            cardBusy = false;
         }
         connection = conn;
         if (conn != null) {
             conn.addReceiveListener(j1Receiver);
         }
         logButton.setEnabled(conn != null);
+        updateCardButtons();
 
         settingsChanged((conn != null) ? conn.getSettings() : null);
     }
@@ -494,19 +522,22 @@ public class X4DataPanel extends JPanel {
             stopLogging();
             return;
         }
-        Path file = chooseLogFile();
+        Path file = chooseSaveFile("Start Logging",
+                "X4_" + LocalDateTime.now().format(LOG_NAME_TIME) + ".txt");
         if (file != null) {
             startLogging(file);
         }
     }
 
     /**
-     * Asks where to save the log: a .txt file, by default in the Data
-     * folder under the install directory (#37).
+     * Asks where to save a log (#37) or the card's data (#36): a .txt
+     * file, by default in the Data folder under the install directory.
      *
+     * @param title         the dialog's title
+     * @param suggestedName the file name offered
      * @return the file, or {@code null} if the user cancelled
      */
-    private Path chooseLogFile() {
+    private Path chooseSaveFile(String title, String suggestedName) {
         Path dir = AppPaths.dataDir();
         try {
             Files.createDirectories(dir);
@@ -517,11 +548,11 @@ public class X4DataPanel extends JPanel {
         }
 
         JFileChooser chooser = new JFileChooser(Files.isDirectory(dir) ? dir.toFile() : null);
-        chooser.setDialogTitle("Start Logging");
+        chooser.setDialogTitle(title);
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
                 "Text files (*.txt)", "txt"));
         chooser.setSelectedFile(new java.io.File(chooser.getCurrentDirectory(),
-                "X4_" + LocalDateTime.now().format(LOG_NAME_TIME) + ".txt"));
+                suggestedName));
 
         while (true) {
             if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
@@ -536,7 +567,7 @@ public class X4DataPanel extends JPanel {
             }
             int answer = JOptionPane.showConfirmDialog(this,
                     file.getFileName() + " already exists. Replace it?",
-                    "Start Logging", JOptionPane.YES_NO_OPTION,
+                    title, JOptionPane.YES_NO_OPTION,
                     JOptionPane.WARNING_MESSAGE);
             if (answer == JOptionPane.YES_OPTION) {
                 return file;
@@ -610,6 +641,237 @@ public class X4DataPanel extends JPanel {
         logStatusLabel.setText(text);
         logStatusLabel.setForeground(color);
         logStatusLabel.setToolTipText(null);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    //  The microSD card (#35, #36)
+    // ────────────────────────────────────────────────────────────────────────
+
+    /** How a download came to an end. */
+    private enum DownloadEnd { COMPLETE, STOPPED_EARLY, CANCELLED }
+
+    /** Enables the card buttons for what is going on. */
+    private void updateCardButtons() {
+        boolean connected = connection != null;
+        eraseCardButton.setEnabled(connected && !cardBusy && download == null);
+        getFromCardButton.setEnabled(connected && !cardBusy);
+        getFromCardButton.setText(download != null ? "Cancel" : "Get from Card");
+    }
+
+    /**
+     * Erase Card (#35): asks first, since it can't be undone, then has
+     * the X4 erase its card's log and says how that went.
+     */
+    private void onEraseCard() {
+        X4Connection conn = connection;
+        if (conn == null) {
+            return;
+        }
+        int answer = JOptionPane.showConfirmDialog(this,
+                "Erase Card irreversibly deletes the data on the X4's microSD card.",
+                "Erase Card", JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION || connection != conn || cardBusy) {
+            return;
+        }
+
+        cardBusy = true;
+        updateCardButtons();
+        showLogStatus("Erasing the card\u2026", BUTTON_COLOR);
+
+        new SwingWorker<X4Connection.CardErase, Void>() {
+            @Override
+            protected X4Connection.CardErase doInBackground() {
+                return conn.eraseCard();
+            }
+
+            @Override
+            protected void done() {
+                if (connection != conn) {
+                    return; // disconnected meanwhile
+                }
+                cardBusy = false;
+                updateCardButtons();
+                X4Connection.CardErase result;
+                try {
+                    result = get();
+                } catch (Exception e) {
+                    showLogStatus("Erasing the card failed: " + e, ERROR_RED);
+                    return;
+                }
+                switch (result) {
+                    case ERASED -> showLogStatus("Card erased", STATUS_GREY);
+                    case NO_CARD -> showLogStatus("Card not detected", ERROR_RED);
+                    default -> showLogStatus(
+                            "The X4 did not say the card was erased", ERROR_RED);
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Get from Card (#36): asks the X4 how much is on the card, asks
+     * where to save it, then has the X4 send it. While it arrives the
+     * button reads Cancel.
+     */
+    private void onGetFromCard() {
+        if (download != null) {
+            finishDownload(DownloadEnd.CANCELLED);
+            return;
+        }
+        X4Connection conn = connection;
+        if (conn == null || cardBusy) {
+            return;
+        }
+
+        cardBusy = true;
+        updateCardButtons();
+        showLogStatus("Checking the card\u2026", BUTTON_COLOR);
+
+        new SwingWorker<Long, Void>() {
+            @Override
+            protected Long doInBackground() {
+                return conn.cardDataSize();
+            }
+
+            @Override
+            protected void done() {
+                if (connection != conn) {
+                    return; // disconnected meanwhile
+                }
+                cardBusy = false;
+                updateCardButtons();
+                Long size;
+                try {
+                    size = get();
+                } catch (Exception e) {
+                    size = null;
+                }
+                if (size == null) {
+                    showLogStatus("The X4 did not say what is on the card", ERROR_RED);
+                } else if (size < 0) {
+                    showLogStatus("Card not detected", ERROR_RED);
+                } else if (size == 0) {
+                    showLogStatus("There is no data on the card", STATUS_GREY);
+                } else {
+                    showLogStatus("", STATUS_GREY);
+                    Path file = chooseSaveFile("Get from Card", "X4_card_"
+                            + LocalDateTime.now().format(LOG_NAME_TIME) + ".txt");
+                    if (file != null && connection == conn) {
+                        startDownload(conn, file, size);
+                    }
+                }
+            }
+        }.execute();
+    }
+
+    /** Starts saving the card's data to {@code file}, replacing any file there. */
+    private void startDownload(X4Connection conn, Path file, long size) {
+        try {
+            // In place before the X4 is asked, so that nothing is missed.
+            download = new CardDownload(file, size);
+        } catch (IOException e) {
+            Console.log("Could not create " + file + ": " + e);
+            showLogStatus("Could not create " + file.getFileName()
+                    + ": " + reason(e), ERROR_RED);
+            return;
+        }
+        Console.log("Getting " + size + " bytes from the card into " + file);
+        cardProgress.setValue(0);
+        cardProgress.setString("0%");
+        cardProgress.setVisible(true);
+        updateCardButtons();
+        showLogStatus("Getting " + bytes(size) + " from the card into "
+                + file.getFileName(), STATUS_GREY);
+        logStatusLabel.setToolTipText(file.toString());
+        downloadTimer.start();
+
+        // The plugin may be busy for a moment; don't hold up the EDT.
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                conn.startCardData();
+                return null;
+            }
+        }.execute();
+    }
+
+    /** Shows how far the download has got, and ends it when it is over. */
+    private void onDownloadTick() {
+        CardDownload current = download;
+        if (current == null) {
+            downloadTimer.stop();
+            return;
+        }
+        long received = current.received();
+        int percent = (int) Math.min(100, received * 100 / current.expected());
+        cardProgress.setValue(percent);
+        cardProgress.setString(percent + "%");
+        cardProgress.setToolTipText(bytes(received) + " of " + bytes(current.expected()));
+
+        switch (current.state()) {
+            case COMPLETE -> finishDownload(DownloadEnd.COMPLETE);
+            case STOPPED_EARLY -> finishDownload(DownloadEnd.STOPPED_EARLY);
+            default -> { }
+        }
+    }
+
+    /** Closes the file being downloaded to and says how it ended. */
+    private void finishDownload(DownloadEnd end) {
+        CardDownload current = download;
+        if (current == null) {
+            return;
+        }
+        download = null;
+        downloadTimer.stop();
+        cardProgress.setVisible(false);
+        updateCardButtons();
+        lineBuffer.setLength(0); // whatever is in it predates the download
+
+        String name = current.file().getFileName().toString();
+        long received = current.received();
+        Console.log("Card data " + end + ": " + received + " of "
+                + current.expected() + " bytes in " + current.file());
+        try {
+            current.close();
+        } catch (IOException e) {
+            showLogStatus("Could not finish " + name + ": " + reason(e), ERROR_RED);
+            return;
+        }
+        switch (end) {
+            case COMPLETE -> {
+                showLogStatus("Saved the card's data to " + name
+                        + " (" + bytes(received) + ")", STATUS_GREY);
+                logStatusLabel.setToolTipText(current.file().toString());
+            }
+            case CANCELLED -> showLogStatus("Cancelled. What arrived is in " + name
+                    + ". The X4 goes on sending until it has finished.", STATUS_GREY);
+            default -> showLogStatus("The card's data stopped at " + bytes(received)
+                    + " of " + bytes(current.expected())
+                    + ". What arrived is in " + name + ".", ERROR_RED);
+        }
+    }
+
+    /** Called on the EDT when a write to the download's file failed. */
+    private void downloadFailed(CardDownload failed, IOException e) {
+        if (download != failed) {
+            return; // already over
+        }
+        Console.log("Saving the card's data to " + failed.file() + " failed: " + e);
+        finishDownload(DownloadEnd.CANCELLED);
+        showLogStatus("Stopped: could not write " + failed.file().getFileName()
+                + ": " + reason(e), ERROR_RED);
+    }
+
+    /** A number of bytes in words, e.g. 20.0 kB. */
+    private static String bytes(long count) {
+        if (count < 1000) {
+            return count + " bytes";
+        }
+        if (count < 1_000_000) {
+            return String.format("%.1f kB", count / 1e3);
+        }
+        return String.format("%.1f MB", count / 1e6);
     }
 
     /** A file error in words; these exceptions' own messages are just the path. */
@@ -832,6 +1094,8 @@ public class X4DataPanel extends JPanel {
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         left.setBackground(CARD_BG);
         eraseCardButton = createStyledButton("Erase Card");
+        eraseCardButton.setEnabled(false); // until J1 connects
+        eraseCardButton.addActionListener(e -> onEraseCard());
         left.add(eraseCardButton);
         bar.add(left, BorderLayout.WEST);
 
@@ -845,7 +1109,9 @@ public class X4DataPanel extends JPanel {
         cardProgress.setVisible(false);
         right.add(cardProgress);
 
-        getFromCardButton = createStyledButton("Get from Card");
+        getFromCardButton = createStyledButton("Get from Card"); // or "Cancel"
+        getFromCardButton.setEnabled(false); // until J1 connects
+        getFromCardButton.addActionListener(e -> onGetFromCard());
         right.add(getFromCardButton);
 
         logButton = createStyledButton("Start Logging");

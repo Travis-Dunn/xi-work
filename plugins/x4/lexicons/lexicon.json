@@ -1,6 +1,6 @@
 {
 	"lexiconSpecificationVersion":"0.2.0",
-	"lexiconVersion":"0.2.0",
+	"lexiconVersion":"0.3.0",
 	"deviceName":"iMet-X4 J1",
 	"deviceID":2,
 	"pluginFileName":"X4Plugin.jar",
@@ -265,32 +265,49 @@
 		{
 			"messageName":"eraseSDCardData",
 			"messageType":{
-				"messageType_q":false,
+				"messageType_q":true,
 				"messageType_c":true,
 				"messageType_p":false
 			},
 			"messageDescription":"Erase the data on the microSD card",
 			"messageTokens": {
+				"return_q":"int",
+				"return_q_len":1,
 				"argument_c":"int",
 				"argument_c_len":0
 			},
 			"messagePanelClass":"...",
-			"implementationNote":"/ERD command. No argument required."
+			"implementationNote":"/ERD command. No argument required. Both forms erase and wait for the device to finish. The query also reports the device's answer: 1=Complete, 0=Card not detected."
 		},
 		{
 			"messageName":"getSDCardData",
+			"messageType":{
+				"messageType_q":false,
+				"messageType_c":true,
+				"messageType_p":false
+			},
+			"messageDescription":"Have the device send the contents of log.dat on the microSD card",
+			"messageTokens": {
+				"argument_c":"int",
+				"argument_c_len":0
+			},
+			"messagePanelClass":"...",
+			"implementationNote":"/GET command. No argument required. The contents could be nothing or very large, so the command only starts the device sending: they arrive on the port as a stream, in place of data lines, for the application to read. Use sdCardDataSize first to learn how many bytes to expect."
+		},
+		{
+			"messageName":"sdCardDataSize",
 			"messageType":{
 				"messageType_q":true,
 				"messageType_c":false,
 				"messageType_p":false
 			},
-			"messageDescription":"Query the device for the contents of log.dat on the microSD card",
+			"messageDescription":"Query the device for the size of log.dat on the microSD card",
 			"messageTokens": {
-				"return_q":"ascii",
-				"return_q_len":0
+				"return_q":"int",
+				"return_q_len":1
 			},
 			"messagePanelClass":"...",
-			"implementationNote":"/GET command. The return of this could be nothing or very large. On the X4, it is implemented as a stream."
+			"implementationNote":"/GET? poll. Returns the number of bytes in log.dat, or -1 if no microSD card is detected."
 		},
 		{
 			"messageName":"enablePort",

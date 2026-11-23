@@ -1,11 +1,12 @@
-# Handoff: iMet-XI / X4 work (as of 2026-11-12)
+# Handoff: iMet-XI / X4 work (as of 2026-11-23)
 
 ## Who and what
 
 I'm a contractor for InterMet Systems (the client), working on **iMet-XI**, a
 Java/Swing rewrite of the client's iMet-XS app (XS source is lost). XI
 configures and reads data from InterMet's X-series devices (X4 first, then
-XQ2, maybe XF) through device plugins. Work is governed by SoW 205196 Rev 03.
+XQ2, maybe XF) through device plugins. Work is governed by SoW 205196 Rev 05
+(Rev 04 added the XQ2, #40–#56; Rev 05 defined #22).
 The X4 manual is 252100.0200 Rev 12. Ask me for either PDF if it's not
 attached.
 
@@ -20,9 +21,9 @@ when work drifts into pluginBase/framework territory.
 
 ## Repos
 
-- **`Travis-Dunn/xi-work`**: the single multi-module Maven repo. Current work
-  is on branch `claude/clever-goodall-ae4od5`, 11 commits ahead of `master`.
-  No PR has been opened.
+- **`Travis-Dunn/xi-work`**: the single multi-module Maven repo. Work is
+  merged to `master` by pull request; check that the last session's branch
+  was merged before starting (one was left unmerged once).
 - `Travis-Dunn/xi` and `Travis-Dunn/X4-Plugin`: old repos, superseded. Their
   work (branch `plugin-transport-ack`) was carried into xi-work.
 - `InterMet-Systems/iMet-XI`: the client's repo; Claude can't reach it. I work
@@ -57,6 +58,14 @@ when work drifts into pluginBase/framework territory.
   `imet.home` property, then jpackage's `app.dir`, then `user.dir`.
 - `Loader` loads the lexicon, then the jar it names. The class name
   `com.imet.plugin.PluginTestExample` is hardcoded.
+- **Tabs:** each tab is its own device. Every J1 connection gets a plugin
+  object of its own (`Loader.NewPluginX4()`): a plugin object holds one
+  device's transport, and when the tabs shared one, both tabs' commands
+  went to whichever X4 connected last. `Loader.GetPluginX4()` now only
+  says the plugin is available. Closing a tab disconnects its J1 and J3.
+  A new tab is told which lexicons and plugins the scanner has already
+  found (before, a second tab reported them all missing and refused to
+  select a product). `tools/harness/two.sh` runs two fake X4s in two tabs.
 
 ## Architecture (agreed)
 
@@ -91,11 +100,20 @@ skipping streamed data lines.
   - query only: `boardDataFormat` (/CBD?, returns e.g. `0,30720`)
   - query only: `acknowledgeDevice` (/ACK?, returns 1 or 0)
   - command only: `resetBoardData` (/CBD=0,0)
+  - query only: `sdCardDataSize` (/GET?, bytes in log.dat, or -1)
+  - query + command: `eraseSDCardData` (/ERD). Both wait for the X4's
+    answer (up to 30 s); the query returns 1 for "Complete", 0 for "Card
+    not detected".
+  - command only: `getSDCardData` (/GET). It only starts the X4 sending;
+    the app reads what follows from J1 itself.
   - parameterized + command: `configurePortToEmpty` / `AirThermistor` /
     `HYT271` / `SerialForward` for ports 4–9. The queries return the values
     the lexicon lists; the trailing bitmask is NOT returned. The commands
     take the port, then those same values, and always send a bitmask of 0.
-- **Lexicon** (`lexiconVersion` 0.2.0, 22 messages): added `j3BaudRate` and
+- **Lexicon** (`lexiconVersion` 0.3.0, 23 messages): 0.3.0 added
+  `sdCardDataSize`, gave `eraseSDCardData` a query form, and turned
+  `getSDCardData` from a query into a command (my changes, not yet put to
+  the client). 0.2.0 added `j3BaudRate` and
   `boardDataFormat`. Fixed `serialNumber`'s `return_q`, and the duplicate
   `return_p` → `return_p_len` in all four `configurePortTo…`.
 - **App use of the plugin:**
@@ -122,6 +140,47 @@ skipping streamed data lines.
   - A port showing "Other (left unchanged)" is not written.
   - Board data is always `/CBD=0,0` (SoW #16), so a device on the factory
     `0,30720` gains the four battery columns the first time.
+- **Restore Data Defaults (#22):** asks first, then writes
+  `X4Settings.dataDefaults(...)` through the same `configure` as Configure
+  X4: J3 at 115200, J4–J9 to no sensor, DPF 1, `/CBD=0,0`, TDP on. The
+  serial number and pressure bias are passed in as the X4 holds them, so
+  they are never sent. It is the one thing on the screen that writes
+  without Configure X4 (my reading of #22 against #26), hence the
+  confirmation.
+- **Load from File, Save to File (#24, #25):** `X4SettingsFile`. The
+  format is ours: `name=value` lines, described in that class. They read
+  and fill the screen only; nothing reaches the X4 until Configure X4.
+  - Save writes the screen, not the X4, and refuses a screen with a
+    mistake on it. A port showing "Other (left unchanged)" is left out.
+  - Load leaves alone any setting the file leaves out, and changes
+    nothing if the file has a mistake (reported with its line number) or
+    names a sensor the screen doesn't offer on that port.
+  - A file carries its X4's serial number and pressure bias, so it works
+    as a backup. Loaded onto a different X4, the status line warns in
+    orange that Configure X4 will replace that X4's. To share a setup
+    without them, delete those two lines from the file.
+- **The microSD card (#35, #36):** `X4Connection.eraseCard`,
+  `cardDataSize`, `startCardData`; `CardDownload` saves the stream.
+  - The plugin interface has no call that returns a stream, and log.dat
+    can be megabytes (about 11 kB/s at 115200 baud), so the plugin only
+    sends `/GET` and the app's J1 listener takes the bytes, counting them
+    against `/GET?` for the progress bar.
+  - Nothing marks the end of the stream, so `CardDownload` decides: once
+    the expected bytes are in, the first 300 ms pause is the end; before
+    that, 5 s of silence, or of a trickle under a tenth of the peak rate
+    (data lines), is an early stop. Slightly more than `/GET?` said can
+    arrive, since the X4 logs to the card until `/GET` is acted on; it is
+    all kept.
+  - While it runs: the button reads Cancel; the fields ignore J1 (the
+    card's lines are old data); the J1 terminal and any PC log still get
+    everything. Cancel only stops saving: the manual has no command to
+    stop the X4 sending.
+  - Unknown until tried on a real X4: whether `/GET?` matches the bytes
+    sent, how fast and how evenly the X4 sends, how long `/ERD` takes, and
+    whether a data line can slip in just after `/GET` is sent (it would
+    land at the start of the file).
+- **Calibration files:** `ThermistorCalibration` is not X4-specific; the
+  XQ2's "Load Coefficients From File" (#50) names the same file.
 - **How the X4 handles commands** (worked out from real-X4 logs,
   2026-11-12; not from the manual):
   - While publishing, the X4 acts on commands once per publishing cycle,
@@ -135,9 +194,18 @@ skipping streamed data lines.
   - This also explains the reply latency in open item 1: a 500 ms timeout
     is shorter than a cycle.
   - `tools/fake_x4.py` behaves this way by default (`--busy`).
+- **Activity indicator** (not in the SoW; my request, 2026-11-23): a
+  line along the bottom of the window, shown only while manufacturing
+  features are enabled. It shows what the selected tab last sent on J1:
+  "Sending /DPF?" for 2.5 s after each send, then "Idle. Last sent /DPF?
+  at 14:03:22" in grey; blank when the tab isn't connected. The bytes
+  come from `X4Connection.addSendListener`, attached before connecting so
+  the handshake shows too (`ActivityBar`, `TabContentPanel.getLastSent`).
 - **Console:** every J1 op, raw byte, reply and plugin decision is logged with
-  timestamps. The console test menu (stdin) is ON: `CONSOLE_TEST_ENABLED` in
-  `MainFrame`. It exercises plugin messages over the GUI's J1 connection.
+  timestamps. The lines don't say which tab they are from. The console
+  test menu (stdin) is OFF but kept: `CONSOLE_TEST_ENABLED` in `MainFrame`.
+  Before turning it on, give it a connection's plugin (see the comment
+  there); the object it uses now is not connected to anything.
 
 ## Commits on the branch (oldest first)
 
@@ -164,8 +232,8 @@ skipping streamed data lines.
 | 32 Ignore header | Done as a precaution: a real X4 sends no header on J1 (captured 2026-11-12). |
 | 33 J1 terminal | Done (ASCII, 2000-line history, follows only at the bottom). |
 | 34 J3 terminal | Done: `J3Connection` has its own reader thread feeding the J3 terminal. Tested on the fake X4 only (no J3 cable). |
-| 35 Erase Card | Button only. |
-| 36 Get from Card + progress | Button and hidden progress bar only. |
+| 35 Erase Card | Done: asks first, sends `/ERD`, then shows "Card erased" or "Card not detected". Fake X4 only. |
+| 36 Get from Card + progress | Done: `/GET?` for the size, a save dialog, then `/GET`; the bytes are saved as they arrive, with a progress bar and Cancel. Fake X4 only; see "The microSD card". |
 | 37 Start/Stop Logging | Done. Records J1 byte for byte (`DataLog`); the save dialog opens in `<install dir>/Data` with a timestamped `.txt` name. Stops on disconnect. |
 | 38 Mark | Done. `Mark: <text>\r\n` on a line of its own: a mark made mid-line waits for that line's end. Enter in the field also marks. |
 | 39 X4 picture | Done. |
@@ -178,11 +246,11 @@ I checked the layout against XS on Windows; it looks good.
 |---|---|
 | 14 Poll at connect | Done. |
 | 15 X4 image | Done. |
-| 16 Sensor options and fields | Done, except the TCal "Load from File" button (disabled; file format unknown). |
+| 16 Sensor options and fields | Done. A temperature sensor's "Load from File" reads InterMet's calibration file (`ThermistorCalibration`: serial number, then four coefficients, one per line; e.g. `112804_AT.tcal`). |
 | 17–21 Serial, frequency, bias, J3 baud, data toggle | Read and write done. |
-| 22 Restore Defaults | Button disabled; TBD in the SoW. |
+| 22 Restore Data Defaults | Done per Rev 05, with the info bubble. Tested on the fake X4 only. |
 | 23 Fetch | Not implemented, as the SoW says. |
-| 24, 25 Load from File, Save to File | Buttons disabled; TBD in the SoW. |
+| 24, 25 Load from File, Save to File | Done; the client left the file format to us. |
 | 26 Configure X4 | Done. Two real-X4 tries lost `/DPF=` because another command followed it too closely; the paced version is not yet tried on a real X4. |
 
 ## Open items, most pressing first
@@ -254,6 +322,10 @@ I checked the layout against XS on Windows; it looks good.
       its data format changes.
     - `tools/harness/run.sh`: runs the real app against the fake under
       Xvfb, drives the panels through reflection, and prints what they show.
+      `FILES=1` and `RESTORE=1` cover #22, #24 and #25; `CAL=<file>` loads
+      a calibration file; `CARD=1` and `CARD=cancel` cover #35 and #36.
+      The fake's card grows as it publishes, and `--card-stall` cuts a
+      download short.
 
     Gotchas:
     - Run GUI harnesses with the distribution folder as the working
@@ -263,8 +335,10 @@ I checked the layout against XS on Windows; it looks good.
 
 ## Suggested next steps
 
-1. Card buttons (#35, #36).
-2. Try J3 on a real X4 with the J3-to-USB cable.
-4. Waiting on the client: the TCal "Load from File" (needs a sample
-   calibration file), and Restore Defaults, Load from File and Save to File
-   (#22, #24, #25, TBD in the SoW). Their buttons are shown but disabled.
+1. A session on a real X4: Configure X4 (paced), Restore Data Defaults,
+   Erase Card, Get from Card (compare the saved file with the card's
+   log.dat), and J3 with the J3-to-USB cable.
+2. Before release: settle the frequency limit (open item 2);
+   connection-state errors (open items 6, 7).
+3. Tell the client about the lexicon changes in 0.3.0.
+4. XQ2 (#40–#56), new in Rev 04.

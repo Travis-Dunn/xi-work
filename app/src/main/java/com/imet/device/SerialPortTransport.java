@@ -39,9 +39,17 @@ class SerialPortTransport implements PluginTransport {
     /** Set by {@link #close}; reads fail from then on. */
     private boolean closed;
 
+    /** Told each chunk written, after it has gone out; may be null. */
+    private volatile java.util.function.Consumer<byte[]> writeListener;
+
     SerialPortTransport(SerialPort port, String label) {
         this.port = port;
         this.label = label;
+    }
+
+    /** Sets who is told of each write. Called on the writing thread. */
+    void setWriteListener(java.util.function.Consumer<byte[]> listener) {
+        this.writeListener = listener;
     }
 
     /**
@@ -74,6 +82,10 @@ class SerialPortTransport implements PluginTransport {
         try {
             Console.log(label + " plugin TX " + Console.escape(data));
             port.writeBytes(data);
+            java.util.function.Consumer<byte[]> listener = writeListener;
+            if (listener != null) {
+                listener.accept(data);
+            }
             return data.length;
         } catch (SerialPortException e) {
             throw new IOException("Serial error: " + e.getExceptionType(), e);

@@ -49,6 +49,12 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
     /** Global flag for manufacturing feature visibility (SoW req #5). */
     private boolean manufacturingEnabled = false;
 
+    /** Shows what the selected tab is sending to its device. */
+    private final ActivityBar activityBar = new ActivityBar();
+
+    /** Turns the indicator to "Idle" once nothing has been sent for a while. */
+    private final Timer activityTimer = new Timer(500, e -> refreshActivity());
+
     DeviceScanner deviceScanner;
     private final ResourceScanner resourceScanner;
     private final Thread consoleThread;
@@ -56,9 +62,13 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
     private static final String ERR_STR_PLUGIN_DIR =
             "Unable to find plugin directory.";
 
-    /* TEMP: the console test sends plugin messages over the J1 connection
-       opened in the GUI. Set to false to keep it from reading stdin. */
-    private static final boolean CONSOLE_TEST_ENABLED = true;
+    /* TEMP: the console test sends plugin messages from stdin. Off; set
+       to true to use it again. It uses Loader.GetPluginX4(), which used
+       to be the plugin object the GUI's J1 connection used. Each
+       connection now has a plugin object of its own (see
+       Loader.NewPluginX4), so before turning this on, give tempCliTest
+       the plugin of the connection to test (X4Connection.getPlugin()). */
+    private static final boolean CONSOLE_TEST_ENABLED = false;
 
     public MainFrame() {
         super(AppInfo.WINDOW_TITLE);
@@ -112,6 +122,12 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
 
         setLayout(new BorderLayout());
         add(tabbedPane, BorderLayout.CENTER);
+
+        // The activity indicator: what the selected tab is sending. A
+        // manufacturing feature, so hidden until those are enabled.
+        activityBar.setVisible(false);
+        add(activityBar, BorderLayout.SOUTH);
+        tabbedPane.addChangeListener(e -> refreshActivity());
 
 
     }
@@ -405,6 +421,14 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
             deviceScanner.stop();
         }
 
+        activityBar.setVisible(manufacturingEnabled);
+        if (manufacturingEnabled) {
+            refreshActivity();
+            activityTimer.start();
+        } else {
+            activityTimer.stop();
+        }
+
         // Propagate to every tab's HardwarePanel.
         for (int i = 0; i < tabbedPane.getTabCount(); i++) {
             Component comp = tabbedPane.getComponentAt(i);
@@ -412,6 +436,17 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
                 tcp.GetHardwarePanel().setManufacturingEnabled(manufacturingEnabled);
             }
         }
+    }
+
+    /** Shows the selected tab's activity in the activity indicator. */
+    private void refreshActivity() {
+        if (!manufacturingEnabled) {
+            return;
+        }
+        TabContentPanel.Sent sent =
+                (tabbedPane.getSelectedComponent() instanceof TabContentPanel tab)
+                        ? tab.getLastSent() : null;
+        activityBar.show(sent, System.currentTimeMillis());
     }
 
     /**
@@ -432,15 +467,26 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
     @Override
     public void onResourcesChanged(Set<String> lexiconDevices,
                                    Set<String> pluginDevices) {
+        // Kept for tabs opened later: the scanner only reports changes.
+        knownLexiconDevices = lexiconDevices;
+        knownPluginDevices = pluginDevices;
         for (int i = 0; i < tabbedPane.getTabCount(); i++) {
             Component comp = tabbedPane.getComponentAt(i);
             if (comp instanceof TabContentPanel tcp) {
-                HardwarePanel hp = tcp.GetHardwarePanel();
-                for (String product : ALL_PRODUCTS) {
-                    hp.setLexiconAvailable(product, lexiconDevices.contains(product));
-                    hp.setPluginAvailable(product, pluginDevices.contains(product));
-                }
+                showResources(tcp.GetHardwarePanel());
             }
+        }
+    }
+
+    /** The lexicons and plugins found by the last scan, by product. */
+    private Set<String> knownLexiconDevices = Set.of();
+    private Set<String> knownPluginDevices = Set.of();
+
+    /** Tells a tab's Hardware screen which products can be used. */
+    private void showResources(HardwarePanel hp) {
+        for (String product : ALL_PRODUCTS) {
+            hp.setLexiconAvailable(product, knownLexiconDevices.contains(product));
+            hp.setPluginAvailable(product, knownPluginDevices.contains(product));
         }
     }
 
@@ -452,6 +498,12 @@ public class MainFrame extends JFrame implements ResourceScannerListener {
         tabCounter++;
         String title = (tabCounter == 1) ? "New Tab" : "New Tab " + tabCounter;
         TabContentPanel content = new TabContentPanel(deviceScanner);
+        // A new tab has to be told what the scanner already found, or it
+        // takes every product's lexicon and plugin to be missing.
+        showResources(content.GetHardwarePanel());
+        // Likewise the manufacturing setting, which may already be on.
+        content.GetHardwarePanel().setManufacturingEnabled(manufacturingEnabled);
+        content.setActivityListener(this::refreshActivity);
         tabbedPane.addTab(title, content);
 
         int index = tabbedPane.indexOfComponent(content);

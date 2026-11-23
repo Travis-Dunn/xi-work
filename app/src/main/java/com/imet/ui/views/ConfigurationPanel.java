@@ -1,12 +1,17 @@
 package com.imet.ui.views;
 
+import com.imet.device.ThermistorCalibration;
 import com.imet.device.X4Connection;
 import com.imet.device.X4Settings;
+import com.imet.device.X4SettingsFile;
 
 import javax.swing.*;
 import java.awt.*;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -21,11 +26,13 @@ import java.util.function.Consumer;
  *       pressure bias, baud rate, data toggle)</li>
  *   <li>Port rows J9–J4 with sensor-type dropdowns, and the fields of the
  *       sensor selected (SoW #16)</li>
- *   <li>Action buttons along the bottom (Restore Defaults | Load from File,
- *       Save to File, Configure X4)</li>
+ *   <li>Action buttons along the bottom (Restore Data Defaults | Load from
+ *       File, Save to File, Configure X4)</li>
  * </ul>
  *
- * <p>Nothing is written to the X4 until Configure X4 is clicked (#26).
+ * <p>Nothing is written to the X4 until Configure X4 is clicked (#26), or
+ * Restore Data Defaults is clicked and confirmed (#22).  Load from File and
+ * Save to File only fill in and read the screen (#24, #25).
  *
  * <p>Call {@link #setConnection(X4Connection)} when the J1 connection is
  * established or dropped.  On connect the form fields are filled from the
@@ -39,6 +46,13 @@ public class ConfigurationPanel extends JPanel {
     private static final Color BUTTON_TEXT  = Color.WHITE;
     private static final Color ERROR_RED   = new Color(255, 25, 25);
     private static final Color STATUS_GREY = new Color(0x999999);
+    private static final Color WARNING_ORANGE = new Color(255, 150, 50);
+
+    /** What Restore Data Defaults does, as worded in SoW #22. */
+    private static final String RESTORE_INFO =
+            "Restore Data Defaults sets the J3 baud rate to 115200, J4 to J9 "
+                    + "to no sensor, data publishing frequency to 1 Hz, and "
+                    + "publishes all board data.";
 
     /* Sensor names as worded in SoW #16. */
     private static final String NO_SENSOR   = "No Sensor";
@@ -108,6 +122,15 @@ public class ConfigurationPanel extends JPanel {
 
     /** Writes the screen to the X4 (#26); enabled only while connected. */
     private JButton configureButton;
+
+    /** Writes the data defaults to the X4 (#22); enabled only while connected. */
+    private JButton restoreButton;
+
+    /** For Load from File and Save to File; kept so it reopens where it was. */
+    private JFileChooser fileChooser;
+
+    /** For a temperature sensor's calibration file; likewise kept. */
+    private JFileChooser calibrationChooser;
 
     /**
      * Told the device's settings after Configure X4 has written and read
@@ -192,6 +215,7 @@ public class ConfigurationPanel extends JPanel {
     public void setConnection(X4Connection conn) {
         this.connection = conn;
         configureButton.setEnabled(conn != null);
+        restoreButton.setEnabled(conn != null);
         X4Settings settings = (conn != null) ? conn.getSettings() : null;
         if (settings != null) {
             applySettings(settings);
@@ -278,12 +302,7 @@ public class ConfigurationPanel extends JPanel {
         SensorFields fields = sensorFields.get(port);
         String[] values = setting.values().split(",");
 
-        String item = switch (setting.sensorId()) {
-            case X4Settings.SENSOR_NONE        -> NO_SENSOR;
-            case X4Settings.SENSOR_TEMPERATURE -> TEMPERATURE;
-            case X4Settings.SENSOR_HUMIDITY    -> HUMIDITY;
-            default                            -> OTHER;
-        };
+        String item = sensorItem(setting.sensorId());
         if (!hasItem(combo, item)) {
             item = OTHER;
         }
@@ -307,6 +326,16 @@ public class ConfigurationPanel extends JPanel {
         if (!item.equals(OTHER)) {
             combo.removeItem(OTHER);
         }
+    }
+
+    /** The dropdown entry for a sensor ID; {@link #OTHER} if it has none. */
+    private static String sensorItem(int sensorId) {
+        return switch (sensorId) {
+            case X4Settings.SENSOR_NONE        -> NO_SENSOR;
+            case X4Settings.SENSOR_TEMPERATURE -> TEMPERATURE;
+            case X4Settings.SENSOR_HUMIDITY    -> HUMIDITY;
+            default                            -> OTHER;
+        };
     }
 
     private static boolean hasItem(JComboBox<String> combo, String item) {
@@ -343,8 +372,23 @@ public class ConfigurationPanel extends JPanel {
             return;
         }
 
+        writeToDevice(conn, wanted, "Configuring\u2026", false);
+    }
+
+    /**
+     * Writes {@code wanted} to the X4 in the background, reads the X4's
+     * settings back, and shows the outcome.
+     *
+     * @param busyText  shown by the heading meanwhile
+     * @param restoring whether this is Restore Data Defaults rather than
+     *                  Configure X4; they differ in what is shown if the
+     *                  X4 doesn't take everything
+     */
+    private void writeToDevice(X4Connection conn, X4Settings wanted,
+                               String busyText, boolean restoring) {
         configureButton.setEnabled(false);
-        statusLabel.setText("Configuring\u2026");
+        restoreButton.setEnabled(false);
+        statusLabel.setText(busyText);
         statusLabel.setForeground(BUTTON_COLOR);
 
         new SwingWorker<List<String>, Void>() {
@@ -360,18 +404,28 @@ public class ConfigurationPanel extends JPanel {
                     return;
                 }
                 configureButton.setEnabled(true);
+                restoreButton.setEnabled(true);
 
                 List<String> refused;
                 try {
                     refused = get();
                 } catch (Exception e) {
-                    showError("Configuring failed: " + e);
+                    showError("Writing to the X4 failed: " + e);
                     return;
                 }
 
                 X4Settings now = conn.getSettings();
                 if (refused.isEmpty()) {
                     applySettings(now);
+                } else if (restoring) {
+                    // Nothing the user entered is being sent, so show what
+                    // the X4 holds now.
+                    if (now != null) {
+                        applySettings(now);
+                    }
+                    showError("The X4 did not take these defaults "
+                            + "(click Restore Data Defaults to try again): "
+                            + String.join(", ", refused));
                 } else {
                     // Leave what the user entered on screen so it can be
                     // corrected or sent again.
@@ -384,6 +438,249 @@ public class ConfigurationPanel extends JPanel {
                 }
             }
         }.execute();
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    //  Restore Data Defaults (#22)
+    // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Asks first, then writes the data defaults to the X4.  Unlike the
+     * rest of this screen it doesn't wait for Configure X4, so it must not
+     * happen on a stray click: it clears the sensor settings on J4 to J9,
+     * calibration values included.
+     */
+    private void onRestoreDefaults() {
+        X4Connection conn = connection;
+        if (conn == null || !conn.isConnected()) {
+            showError("Connect J1 on the Hardware screen first.");
+            return;
+        }
+
+        // The serial number and pressure bias are not defaults (#22), and
+        // are kept by asking for the ones the X4 already has.
+        X4Settings held = conn.getSettings();
+        if (held == null || !held.isComplete()) {
+            showError("Not all of the X4's settings could be read, so its "
+                    + "defaults can't be restored. Reconnect J1 and try again.");
+            return;
+        }
+
+        int answer = JOptionPane.showConfirmDialog(this,
+                "<html><body style='width:320px;'>" + RESTORE_INFO
+                        + "<br><br>This is written to the X4 straight away. "
+                        + "The serial number and pressure bias are not changed."
+                        + "</body></html>",
+                "Restore Data Defaults", JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION || connection != conn) {
+            return;
+        }
+
+        clearErrorMarks();
+        writeToDevice(conn,
+                X4Settings.dataDefaults(held.serialNumber(), held.pressureBias()),
+                "Restoring data defaults\u2026", true);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    //  Load from File, Save to File (#24, #25)
+    // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Saves the settings on screen to a text file (#25).  This is the
+     * screen, not the X4: anything edited but not yet configured is saved
+     * as edited.  A port showing {@link #OTHER} is left out of the file.
+     */
+    private void onSave() {
+        clearErrorMarks();
+        List<String> errors = new ArrayList<>();
+        X4Settings form = readForm(errors);
+        if (!errors.isEmpty()) {
+            showError(errors.get(0));
+            return;
+        }
+
+        Path file = chooseFile(true, "X4_" + form.serialNumber() + "_config.txt");
+        if (file == null) {
+            return;
+        }
+        try {
+            X4SettingsFile.save(form, file);
+        } catch (IOException e) {
+            showError("Could not save " + file.getFileName() + ": " + reason(e));
+            return;
+        }
+        statusLabel.setText("Saved to " + file.getFileName());
+        statusLabel.setForeground(STATUS_GREY);
+    }
+
+    /**
+     * Fills the screen in from a file saved by Save to File (#24).  The
+     * X4 is not touched until Configure X4 is clicked.  A setting the file
+     * leaves out stays as it is on screen; a file with a mistake in it
+     * changes nothing.
+     */
+    private void onLoad() {
+        Path file = chooseFile(false, null);
+        if (file == null) {
+            return;
+        }
+        String name = file.getFileName().toString();
+
+        X4Settings loaded;
+        try {
+            loaded = X4SettingsFile.load(file);
+        } catch (X4SettingsFile.FormatException e) {
+            showError(name + " was not loaded. " + e.getMessage());
+            return;
+        } catch (IOException e) {
+            showError("Could not read " + name + ": " + reason(e));
+            return;
+        }
+
+        // The file may name a sensor this screen doesn't offer on that port.
+        for (int port = X4Settings.FIRST_PORT; port <= X4Settings.LAST_PORT; port++) {
+            X4Settings.Port setting = loaded.port(port);
+            if (setting != null
+                    && !hasItem(portCombos.get(port), sensorItem(setting.sensorId()))) {
+                showError(name + " was not loaded. J" + port + " can't be set to the "
+                        + sensorItem(setting.sensorId()) + ".");
+                return;
+            }
+        }
+
+        applySettings(loaded);
+
+        // Loading someone else's file brings their X4's serial number and
+        // pressure bias with it, and the X4 can't be asked for its own
+        // again once they are overwritten. Say so before Configure X4.
+        List<String> replaced = new ArrayList<>();
+        X4Settings held = (connection != null) ? connection.getSettings() : null;
+        if (held != null) {
+            if (loaded.serialNumber() != null && held.serialNumber() != null
+                    && !loaded.serialNumber().equals(held.serialNumber())) {
+                replaced.add("serial number");
+            }
+            if (loaded.pressureBias() != null && held.pressureBias() != null
+                    && Double.parseDouble(loaded.pressureBias())
+                            != Double.parseDouble(held.pressureBias())) {
+                replaced.add("pressure bias");
+            }
+        }
+        if (replaced.isEmpty()) {
+            statusLabel.setText("Loaded " + name
+                    + ". Click Configure X4 to write it to the X4.");
+            statusLabel.setForeground(STATUS_GREY);
+        } else {
+            statusLabel.setText("Loaded " + name + ". Its "
+                    + String.join(" and ", replaced)
+                    + (replaced.size() == 1 ? " differs" : " differ")
+                    + " from this X4's; Configure X4 will replace this X4's.");
+            statusLabel.setForeground(WARNING_ORANGE);
+        }
+    }
+
+    /**
+     * Fills in a temperature sensor's serial number and TCal values from
+     * its calibration file (#16).  Like the rest of the screen, nothing
+     * reaches the X4 until Configure X4 is clicked.
+     *
+     * @param port the port whose row the button is in
+     */
+    private void onLoadCalibration(int port) {
+        if (calibrationChooser == null) {
+            calibrationChooser = new JFileChooser();
+            calibrationChooser.setDialogTitle("Load Calibration File");
+            calibrationChooser.setFileFilter(
+                    new javax.swing.filechooser.FileNameExtensionFilter(
+                            "Calibration files (*.tcal, *.txt)", "tcal", "txt"));
+        }
+        if (calibrationChooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        Path file = calibrationChooser.getSelectedFile().toPath();
+        String name = file.getFileName().toString();
+
+        ThermistorCalibration calibration;
+        try {
+            calibration = ThermistorCalibration.load(file);
+        } catch (ThermistorCalibration.FormatException e) {
+            showError(name + " was not loaded. " + e.getMessage());
+            return;
+        } catch (IOException e) {
+            showError("Could not read " + name + ": " + reason(e));
+            return;
+        }
+
+        SensorFields fields = sensorFields.get(port);
+        fields.atSerial().setText(calibration.serialNumber());
+        for (int i = 0; i < 4; i++) {
+            fields.tcal()[i].setText(calibration.coefficients().get(i));
+            fields.tcal()[i].setCaretPosition(0);
+        }
+        clearErrorMarks();
+        statusLabel.setText("Loaded " + name + " for J" + port
+                + ". Click Configure X4 to write it to the X4.");
+        statusLabel.setForeground(STATUS_GREY);
+    }
+
+    /**
+     * Asks for the file to save to or load from.
+     *
+     * @param saving        whether the file is to be written
+     * @param suggestedName the name offered when saving
+     * @return the file, or {@code null} if the user cancelled
+     */
+    private Path chooseFile(boolean saving, String suggestedName) {
+        if (fileChooser == null) {
+            fileChooser = new JFileChooser();
+            fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+                    "Text files (*.txt)", "txt"));
+        }
+        if (!saving) {
+            fileChooser.setDialogTitle("Load from File");
+            return fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION
+                    ? fileChooser.getSelectedFile().toPath() : null;
+        }
+
+        fileChooser.setDialogTitle("Save to File");
+        fileChooser.setSelectedFile(new java.io.File(
+                fileChooser.getCurrentDirectory(), suggestedName));
+        while (true) {
+            if (fileChooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+                return null;
+            }
+            Path file = fileChooser.getSelectedFile().toPath();
+            if (!file.getFileName().toString().contains(".")) {
+                file = file.resolveSibling(file.getFileName() + ".txt");
+            }
+            if (!Files.exists(file)) {
+                return file;
+            }
+            int answer = JOptionPane.showConfirmDialog(this,
+                    file.getFileName() + " already exists. Replace it?",
+                    "Save to File", JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+            if (answer == JOptionPane.YES_OPTION) {
+                return file;
+            }
+            fileChooser.setSelectedFile(file.toFile());
+        }
+    }
+
+    /** A file error in words; these exceptions' own messages are just the path. */
+    private static String reason(IOException e) {
+        if (e instanceof java.nio.file.NoSuchFileException) {
+            return "the file or folder does not exist";
+        }
+        if (e instanceof java.nio.file.AccessDeniedException) {
+            return "permission denied";
+        }
+        if (e instanceof java.nio.charset.CharacterCodingException) {
+            return "it is not a text file";
+        }
+        return (e.getMessage() != null) ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     /**
@@ -677,15 +974,15 @@ public class ConfigurationPanel extends JPanel {
             for (int i = 0; i < 4; i++) {
                 area.add(createFieldColumn("TCal" + (i + 1), fields.tcal()[i]));
             }
-            // Reads the sensor's calibration file. Waiting on a sample of
-            // the file to know its format.
+            // Fills these five fields from the sensor's calibration file.
             JButton load = createStyledButton("Load from File");
-            load.setEnabled(false);
-            load.setToolTipText("Not available yet");
+            load.addActionListener(e -> onLoadCalibration(port));
             area.add(createFieldColumn(" ", load));
             area.add(createFieldColumn(" ", createInfoIcon(
                     "The AT serial number and TCal values come from the "
-                            + "temperature sensor's calibration file.")));
+                            + "temperature sensor's calibration file "
+                            + "(for example 112804_AT.tcal). Load from File "
+                            + "fills them in.")));
         } else if (HUMIDITY.equals(sensor)) {
             area.add(createFieldColumn("I2C Address", fields.i2c()));
             area.add(createFieldColumn(" ", createInfoIcon(
@@ -749,17 +1046,26 @@ public class ConfigurationPanel extends JPanel {
         bar.setBackground(CARD_BG);
         bar.setBorder(BorderFactory.createEmptyBorder(12, 0, 0, 0));
 
-        // Left: Restore Defaults
-        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        // Left: Restore Data Defaults, and what it does (#22)
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         left.setBackground(CARD_BG);
-        left.add(createUnavailableButton("Restore Defaults")); // #22, TBD
+        restoreButton = createStyledButton("Restore Data Defaults");
+        restoreButton.setEnabled(false); // until J1 connects
+        restoreButton.addActionListener(e -> onRestoreDefaults());
+        left.add(restoreButton);
+        left.add(createInfoIcon(RESTORE_INFO));
         bar.add(left, BorderLayout.WEST);
 
         // Right: Load from File | Save to File | Configure X4
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         right.setBackground(CARD_BG);
-        right.add(createUnavailableButton("Load from File")); // #24, TBD
-        right.add(createUnavailableButton("Save to File"));   // #25, TBD
+        // These two work on the screen alone, connected or not.
+        JButton loadButton = createStyledButton("Load from File"); // #24
+        loadButton.addActionListener(e -> onLoad());
+        right.add(loadButton);
+        JButton saveButton = createStyledButton("Save to File");   // #25
+        saveButton.addActionListener(e -> onSave());
+        right.add(saveButton);
         configureButton = createStyledButton("Configure X4");  // #26
         configureButton.setEnabled(false); // until J1 connects
         configureButton.addActionListener(e -> onConfigure());
@@ -777,14 +1083,6 @@ public class ConfigurationPanel extends JPanel {
      */
     private static void showAllDigits(JSpinner spinner) {
         spinner.setEditor(new JSpinner.NumberEditor(spinner, "0.#######"));
-    }
-
-    /** A button for a feature the SoW has not defined yet: shown, but off. */
-    private JButton createUnavailableButton(String text) {
-        JButton button = createStyledButton(text);
-        button.setEnabled(false);
-        button.setToolTipText("Not available yet");
-        return button;
     }
 
     // ────────────────────────────────────────────────────────────────────────

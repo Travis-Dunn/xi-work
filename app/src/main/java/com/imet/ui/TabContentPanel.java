@@ -27,6 +27,20 @@ public class TabContentPanel extends JPanel {
     private final BreadcrumbBar breadcrumbBar;
     private final HardwarePanel hardwarePanel;
 
+    /**
+     * Something this tab sent to its device.
+     *
+     * @param text   what was sent, without its line ending
+     * @param timeMs when, as {@link System#currentTimeMillis()}
+     */
+    public record Sent(String text, long timeMs) { }
+
+    /** The last thing this tab sent; null if nothing, or since disconnecting. */
+    private Sent lastSent;
+
+    /** Run on the EDT each time {@link #getLastSent()} changes. */
+    private Runnable activityListener;
+
     public TabContentPanel(DeviceScanner scanner) {
         setLayout(new BorderLayout());
 
@@ -51,6 +65,9 @@ public class TabContentPanel extends JPanel {
         // which shows the settings read at connect, and to the X4 Data
         // panel for those settings and its J1 terminal.
         hardwarePanel.setConnectionListener(conn -> {
+            if (conn == null) {
+                setLastSent(null); // disconnected: nothing is going on
+            }
             for (Component c : bodyPanel.getComponents()) {
                 if (c instanceof ConfigurationPanel cp) {
                     cp.setConnection(conn);
@@ -58,6 +75,13 @@ public class TabContentPanel extends JPanel {
                     dp.setConnection(conn);
                 }
             }
+        });
+
+        // Everything sent to the device, for the activity indicator. This
+        // arrives on the sending thread.
+        hardwarePanel.setSendListener(data -> {
+            Sent sent = new Sent(describe(data), System.currentTimeMillis());
+            SwingUtilities.invokeLater(() -> setLastSent(sent));
         });
 
         // Same for J3, which feeds the X4 Data panel's J3 terminal.
@@ -123,6 +147,39 @@ public class TabContentPanel extends JPanel {
 
         bodyPanel.revalidate();
         bodyPanel.repaint();
+    }
+
+    /** What was sent, as text on one line: "/DPF?" for "/DPF?\r\n". */
+    private static String describe(byte[] data) {
+        String text = new String(data, java.nio.charset.StandardCharsets.ISO_8859_1);
+        while (text.endsWith("\r") || text.endsWith("\n")) {
+            text = text.substring(0, text.length() - 1);
+        }
+        // Anything else unprintable is shown escaped, without the quotes.
+        String escaped = com.imet.Console.escape(text);
+        return escaped.substring(1, escaped.length() - 1);
+    }
+
+    private void setLastSent(Sent sent) {
+        lastSent = sent;
+        if (activityListener != null) {
+            activityListener.run();
+        }
+    }
+
+    /** The last thing this tab sent to its device, or null. */
+    public Sent getLastSent() {
+        return lastSent;
+    }
+
+    /** @param listener run on the EDT each time {@link #getLastSent()} changes */
+    public void setActivityListener(Runnable listener) {
+        this.activityListener = listener;
+    }
+
+    /** Called when this tab is closed: disconnects its device. */
+    public void close() {
+        hardwarePanel.close();
     }
 
     /** Switch the visible view by name. */
